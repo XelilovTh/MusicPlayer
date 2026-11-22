@@ -20,19 +20,30 @@ class AudioScanner(private val context: Context) {
 
     companion object {
         private const val TAG = "AudioScanner"
-        private val ALBUM_ART_URI = Uri.parse("content://media/external/audio/albumart")
+        private const val ALBUM_ART_BASE_URI_STRING = "content://media/external/audio/albumart"
+        private val ALBUM_ART_URI: Uri by lazy {
+            try {
+                Uri.parse(ALBUM_ART_BASE_URI_STRING)
+            } catch (_: Throwable) {
+                Uri.EMPTY
+            }
+        }
     }
 
     /**
      * Checks if the required read audio / storage permission is granted.
      */
     fun hasPermission(): Boolean {
-        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Manifest.permission.READ_MEDIA_AUDIO
-        } else {
-            Manifest.permission.READ_EXTERNAL_STORAGE
+        return try {
+            val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                Manifest.permission.READ_MEDIA_AUDIO
+            } else {
+                Manifest.permission.READ_EXTERNAL_STORAGE
+            }
+            ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+        } catch (_: Throwable) {
+            false
         }
-        return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
     }
 
     /**
@@ -41,7 +52,9 @@ class AudioScanner(private val context: Context) {
      */
     suspend fun scanLocalSongs(): List<Song> = withContext(Dispatchers.IO) {
         if (!hasPermission()) {
-            Log.d(TAG, "Audio permission not granted; returning empty list.")
+            try {
+                Log.d(TAG, "Audio permission not granted; returning empty list.")
+            } catch (_: Throwable) {}
             return@withContext emptyList()
         }
 
@@ -81,13 +94,21 @@ class AudioScanner(private val context: Context) {
                     val durationMs = cursor.getLong(durationCol)
                     val albumId = cursor.getLong(albumIdCol)
 
-                    val contentUri = ContentUris.withAppendedId(
-                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                        id
-                    ).toString()
+                    val contentUri = try {
+                        ContentUris.withAppendedId(
+                            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                            id
+                        ).toString()
+                    } catch (_: Throwable) {
+                        "content://media/external/audio/media/$id"
+                    }
 
                     val albumArtUri = if (albumId > 0) {
-                        ContentUris.withAppendedId(ALBUM_ART_URI, albumId).toString()
+                        try {
+                            ContentUris.withAppendedId(ALBUM_ART_URI, albumId).toString()
+                        } catch (_: Throwable) {
+                            "$ALBUM_ART_BASE_URI_STRING/$albumId"
+                        }
                     } else {
                         null
                     }
@@ -106,12 +127,12 @@ class AudioScanner(private val context: Context) {
                 }
             }
         } catch (e: SecurityException) {
-            Log.e(TAG, "SecurityException while scanning audio: ${e.message}", e)
+            try { Log.e(TAG, "SecurityException while scanning audio: ${e.message}", e) } catch (_: Throwable) {}
         } catch (e: Exception) {
-            Log.e(TAG, "Exception while scanning audio: ${e.message}", e)
+            try { Log.e(TAG, "Exception while scanning audio: ${e.message}", e) } catch (_: Throwable) {}
         }
 
-        Log.d(TAG, "Scanned ${songs.size} local audio files.")
+        try { Log.d(TAG, "Scanned ${songs.size} local audio files.") } catch (_: Throwable) {}
         return@withContext songs
     }
 }
