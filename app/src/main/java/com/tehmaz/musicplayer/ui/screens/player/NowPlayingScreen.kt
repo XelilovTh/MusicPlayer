@@ -160,7 +160,7 @@ fun NowPlayingScreen(
                         .border(1.5.dp, GlassBorderGradient, artShape),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (!song?.albumArtUri.isNullOrEmpty()) {
+                    if (song != null && !song.albumArtUri.isNullOrEmpty()) {
                         AsyncImage(
                             model = song.albumArtUri,
                             contentDescription = song.title,

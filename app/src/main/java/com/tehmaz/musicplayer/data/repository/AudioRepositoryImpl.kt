@@ -204,7 +204,7 @@ class AudioRepositoryImpl(
         }
 
         // When local songs exist, build dynamic playlists from albums / artists
-        val albumPlaylists = songs.groupBy { it.album }.mapIndexed { index, (albumName, albumSongs) ->
+        val albumPlaylists = songs.groupBy { it.album }.entries.mapIndexed { index, (albumName, albumSongs) ->
             Playlist(
                 id = (index + 10).toLong(),
                 name = albumName,
