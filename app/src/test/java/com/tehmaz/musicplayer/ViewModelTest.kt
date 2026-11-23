@@ -150,14 +150,11 @@ class ViewModelTest {
         viewModel.selectTab(LibraryTab.ALBUMS)
         assertEquals(LibraryTab.ALBUMS, viewModel.selectedTab.value)
 
-        viewModel.selectTab(LibraryTab.GENRES)
-        assertEquals(LibraryTab.GENRES, viewModel.selectedTab.value)
-
         viewModel.selectTab(LibraryTab.ARTISTS)
         assertEquals(LibraryTab.ARTISTS, viewModel.selectedTab.value)
 
-        viewModel.selectTab(LibraryTab.PLAYLISTS)
-        assertEquals(LibraryTab.PLAYLISTS, viewModel.selectedTab.value)
+        // Playlists are exposed as data, not as a LibraryTab.
+        assertEquals(1, viewModel.playlists.value.size)
     }
 
     @Test
@@ -187,7 +184,7 @@ class ViewModelTest {
         val viewModel = SearchViewModel(repository, playbackManager)
         advanceUntilIdle()
 
-        // Initially recommended songs
+        // A blank query shows all songs found on the device.
         assertEquals(2, viewModel.searchResults.value.size)
 
         // Query change with non-blank
@@ -203,17 +200,18 @@ class ViewModelTest {
     }
 
     @Test
-    fun testSearchViewModelTagSelectionAndPlayback() = runTest(testDispatcher) {
+    fun testSearchViewModelQueryAndPlayback() = runTest(testDispatcher) {
         val viewModel = SearchViewModel(repository, playbackManager)
         advanceUntilIdle()
 
-        viewModel.selectTag("Lofi")
+        viewModel.onQueryChange("Song 1")
         advanceUntilIdle()
-        assertEquals("Lofi", viewModel.query.value)
-        coVerify { repository.searchSongs("Lofi") }
+        assertEquals("Song 1", viewModel.query.value)
+        assertEquals(listOf(testSong1), viewModel.searchResults.value)
+        coVerify { repository.searchSongs("Song 1") }
 
         viewModel.playSong(testSong1)
-        verify { playbackManager.playSong(testSong1, any()) }
+        verify { playbackManager.playSong(testSong1, listOf(testSong1)) }
 
         viewModel.playPause()
         verify { playbackManager.playPause() }
