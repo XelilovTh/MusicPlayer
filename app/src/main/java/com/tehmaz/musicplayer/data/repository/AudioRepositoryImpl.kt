@@ -12,16 +12,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.util.concurrent.TimeUnit
 
-/**
- * Repository backed by the device's MediaStore. There is no demo/placeholder catalog:
- * without the audio permission (or without music) the library is simply empty.
- */
+/** Repository backed exclusively by MediaStore. No sample or placeholder catalog is used. */
 class AudioRepositoryImpl(
     private val scanner: AudioScanner,
     @Suppress("unused") private val context: Context,
     private val userPlaylists: UserPlaylistStore = UserPlaylistStore(),
-    private val history: HistoryStore = HistoryStore()
+    private val history: HistoryStore = HistoryStore(),
+    private val cacheClockNanos: () -> Long = System::nanoTime,
+    private val cacheTtlNanos: Long = TimeUnit.SECONDS.toNanos(30)
 ) : AudioRepository {
 
     companion object {
@@ -32,24 +32,28 @@ class AudioRepositoryImpl(
     }
 
     private val mutex = Mutex()
-
-    @Volatile
-    private var cachedSongs: List<Song>? = null
+    @Volatile private var cachedSongs: List<Song>? = null
+    @Volatile private var cacheCreatedAtNanos: Long = 0L
 
     override fun hasPermission(): Boolean = scanner.hasPermission()
 
     override suspend fun getSongs(): List<Song> = withContext(Dispatchers.IO) {
         mutex.withLock {
-            cachedSongs?.let { return@withContext it }
-
-            // Without permission nothing is cached, so granting it later takes effect immediately.
             if (!scanner.hasPermission()) {
+                cachedSongs = null
+                cacheCreatedAtNanos = 0L
                 return@withContext emptyList()
             }
-
+            val now = cacheClockNanos()
+            cachedSongs?.let { cached ->
+                if (now - cacheCreatedAtNanos < cacheTtlNanos) {
+                    return@withContext cached
+                }
+            }
             val songs = scanner.scanLocalSongs()
             Log.d(TAG, "Loaded ${songs.size} songs from local storage.")
             cachedSongs = songs
+            cacheCreatedAtNanos = now
             songs
         }
     }
@@ -71,7 +75,6 @@ class AudioRepositoryImpl(
     override suspend fun getPlaylists(): List<Playlist> = withContext(Dispatchers.IO) {
         val songs = getSongs()
         val result = mutableListOf<Playlist>()
-
         if (songs.isNotEmpty()) {
             result += Playlist(
                 id = ALL_SONGS_ID,
@@ -80,7 +83,6 @@ class AudioRepositoryImpl(
                 coverArtUrl = songs.firstOrNull { !it.albumArtUri.isNullOrEmpty() }?.albumArtUri,
                 songs = songs
             )
-
             songs.groupBy { it.album }.entries.forEachIndexed { index, (albumName, albumSongs) ->
                 result += Playlist(
                     id = index + ALBUM_ID_OFFSET,
@@ -91,9 +93,9 @@ class AudioRepositoryImpl(
                 )
             }
         }
-
+        val songsById = songs.associateBy(Song::id)
         userPlaylists.playlists.value.forEach { userPlaylist ->
-            val resolved = userPlaylist.songIds.mapNotNull { id -> songs.firstOrNull { it.id == id } }
+            val resolved = userPlaylist.songIds.mapNotNull(songsById::get)
             result += Playlist(
                 id = userPlaylist.id,
                 name = userPlaylist.name,
@@ -102,7 +104,6 @@ class AudioRepositoryImpl(
                 songs = resolved
             )
         }
-
         result
     }
 
@@ -111,17 +112,17 @@ class AudioRepositoryImpl(
     }
 
     override suspend fun getRecentSongs(): List<Song> = withContext(Dispatchers.IO) {
-        val songs = getSongs()
-        val recent = history.recentSongIds().mapNotNull { id -> songs.firstOrNull { it.id == id } }
-        if (recent.isNotEmpty()) recent.take(RECENT_LIMIT) else songs.take(5)
+        val songsById = getSongs().associateBy(Song::id)
+        history.recentSongIds().mapNotNull(songsById::get).take(RECENT_LIMIT)
     }
 
     override suspend fun refresh() {
-        mutex.withLock { cachedSongs = null }
+        mutex.withLock {
+            cachedSongs = null
+            cacheCreatedAtNanos = 0L
+        }
         LibraryEvents.notifyChanged()
     }
 
-    override fun recordPlayed(songId: Long) {
-        history.recordSong(songId)
-    }
+    override fun recordPlayed(songId: Long) = history.recordSong(songId)
 }

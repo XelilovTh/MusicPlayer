@@ -9,6 +9,7 @@ import com.tehmaz.musicplayer.data.store.HistoryStore
 import com.tehmaz.musicplayer.data.store.KeyValueStore
 import com.tehmaz.musicplayer.data.store.UserPlaylistStore
 import com.tehmaz.musicplayer.playback.AudioPlaybackManager
+import com.tehmaz.musicplayer.ui.components.SongActionsViewModel
 import com.tehmaz.musicplayer.ui.screens.home.HomeViewModel
 import com.tehmaz.musicplayer.ui.screens.library.LibraryViewModel
 import com.tehmaz.musicplayer.ui.screens.player.NowPlayingViewModel
@@ -46,9 +47,10 @@ val appModule = module {
     }
 
     // Screen ViewModels
+    viewModel { SongActionsViewModel(get(), get()) }
     viewModel { HomeViewModel(get(), get()) }
-    viewModel { NowPlayingViewModel(get()) }
+    viewModel { NowPlayingViewModel(get(), get()) }
     viewModel { LibraryViewModel(get(), get()) }
     viewModel { SearchViewModel(get(), get()) }
-    viewModel { PlaylistViewModel(get(), get()) }
+    viewModel { PlaylistViewModel(get(), get(), get()) }
 }

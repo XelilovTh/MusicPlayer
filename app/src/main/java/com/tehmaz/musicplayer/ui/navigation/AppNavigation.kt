@@ -5,9 +5,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -15,7 +17,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.tehmaz.musicplayer.playback.AudioPlaybackManager
 import com.tehmaz.musicplayer.ui.components.FloatingBottomBar
+import com.tehmaz.musicplayer.ui.components.MiniPlayerBar
 import com.tehmaz.musicplayer.ui.components.NavTab
 import com.tehmaz.musicplayer.ui.screens.eq.EQScreen
 import com.tehmaz.musicplayer.ui.screens.home.HomeScreen
@@ -26,6 +30,7 @@ import com.tehmaz.musicplayer.ui.screens.search.SearchScreen
 import com.tehmaz.musicplayer.ui.screens.settings.SettingsScreen
 import com.tehmaz.musicplayer.ui.screens.sleeptimer.SleepTimerScreen
 import com.tehmaz.musicplayer.ui.theme.DarkBackground
+import org.koin.compose.koinInject
 
 @Composable
 fun AppNavigation(
@@ -62,7 +67,6 @@ fun AppNavigation(
                         onNavigateToPlaylist = { playlistId ->
                             navController.navigate(Screen.PlaylistDetail.createRoute(playlistId))
                         },
-                        onNavigateToNowPlaying = { navController.navigate(Screen.NowPlaying.route) },
                         onNavigateToLibrary = { navController.navigate(Screen.Library.route) }
                     )
                 }
@@ -70,22 +74,18 @@ fun AppNavigation(
                 composable(Screen.Playlists.route) {
                     // Playlists tab displays default curated playlist or overview
                     PlaylistScreen(
-                        playlistId = 1L,
+                        playlistId = -1L,
                         onBackClick = { navController.popBackStack() },
-                        onNavigateToNowPlaying = { navController.navigate(Screen.NowPlaying.route) }
+                        onNavigateToPlaylist = { id -> navController.navigate(Screen.PlaylistDetail.createRoute(id)) }
                     )
                 }
 
                 composable(Screen.Search.route) {
-                    SearchScreen(
-                        onNavigateToNowPlaying = { navController.navigate(Screen.NowPlaying.route) }
-                    )
+                    SearchScreen()
                 }
 
                 composable(Screen.Library.route) {
-                    LibraryScreen(
-                        onNavigateToNowPlaying = { navController.navigate(Screen.NowPlaying.route) }
-                    )
+                    LibraryScreen()
                 }
 
                 composable(
@@ -98,7 +98,7 @@ fun AppNavigation(
                     PlaylistScreen(
                         playlistId = playlistId,
                         onBackClick = { navController.popBackStack() },
-                        onNavigateToNowPlaying = { navController.navigate(Screen.NowPlaying.route) }
+                        onNavigateToPlaylist = { id -> navController.navigate(Screen.PlaylistDetail.createRoute(id)) }
                     )
                 }
 
@@ -148,6 +148,41 @@ fun AppNavigation(
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
             }
+
+            val showMiniPlayer = currentRoute !in listOf(
+                Screen.NowPlaying.route,
+                Screen.EQ.route,
+                Screen.SleepTimer.route,
+                Screen.Settings.route
+            )
+            if (showMiniPlayer) {
+                GlobalMiniPlayer(
+                    onOpenPlayer = { navController.navigate(Screen.NowPlaying.route) },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = if (isTopLevelDestination) 88.dp else 12.dp)
+                )
+            }
         }
     }
+}
+
+@Composable
+private fun GlobalMiniPlayer(
+    onOpenPlayer: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val playbackManager: AudioPlaybackManager = koinInject()
+    val playbackState by playbackManager.playbackState.collectAsState()
+    val song = playbackState.currentSong ?: return
+
+    MiniPlayerBar(
+        currentSong = song,
+        isPlaying = playbackState.isPlaying,
+        progress = playbackState.progress,
+        onPlayPauseClick = playbackManager::playPause,
+        onNextClick = playbackManager::next,
+        onBarClick = onOpenPlayer,
+        modifier = modifier
+    )
 }

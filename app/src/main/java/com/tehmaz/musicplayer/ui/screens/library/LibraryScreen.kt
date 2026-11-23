@@ -19,25 +19,29 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.ripple.rememberRipple
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,10 +50,13 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.tehmaz.musicplayer.data.model.Song
 import com.tehmaz.musicplayer.ui.components.CategoryPill
+import com.tehmaz.musicplayer.ui.components.EmptyLibraryCard
+import com.tehmaz.musicplayer.ui.components.SongOptionsButton
+import com.tehmaz.musicplayer.ui.components.rememberPermissionRequester
 import com.tehmaz.musicplayer.ui.components.GlassPillButton
 import com.tehmaz.musicplayer.ui.components.GlassmorphicCard
 import com.tehmaz.musicplayer.ui.components.GlowBackground
-import com.tehmaz.musicplayer.ui.components.MiniPlayerBar
+import com.tehmaz.musicplayer.ui.components.rememberPlaybackSummary
 import com.tehmaz.musicplayer.ui.theme.AmberGoldPrimary
 import com.tehmaz.musicplayer.ui.theme.TextMuted
 import com.tehmaz.musicplayer.ui.theme.TextPrimary
@@ -58,12 +65,49 @@ import org.koin.androidx.compose.koinViewModel
 
 @Composable
 fun LibraryScreen(
-    onNavigateToNowPlaying: () -> Unit,
     viewModel: LibraryViewModel = koinViewModel()
 ) {
-    val playbackState by viewModel.playbackState.collectAsState()
+    val playbackSummary = rememberPlaybackSummary(viewModel.playbackState)
     val songs by viewModel.songs.collectAsState()
     val selectedTab by viewModel.selectedTab.collectAsState()
+    var hasPermission by remember { mutableStateOf(viewModel.hasPermission()) }
+    val requestPermission = rememberPermissionRequester {
+        hasPermission = viewModel.hasPermission()
+        viewModel.rescan()
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val permissionNowGranted = viewModel.hasPermission()
+                if (!hasPermission && permissionNowGranted) viewModel.rescan()
+                else viewModel.refresh()
+                hasPermission = permissionNowGranted
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val libraryRows = remember(songs, selectedTab) {
+        if (selectedTab == LibraryTab.ALL) {
+            songs.mapIndexed { index, song ->
+                LibraryRow(key = "song:${song.id}", song = song, index = index + 1)
+            }
+        } else {
+            val groups = songs.groupBy {
+                if (selectedTab == LibraryTab.ARTISTS) it.artist else it.album
+            }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
+            buildList {
+                groups.forEach { (groupName, groupSongs) ->
+                    add(LibraryRow(key = "header:$groupName", sectionTitle = groupName))
+                    groupSongs.sortedBy { it.title.lowercase() }.forEachIndexed { index, song ->
+                        add(LibraryRow(key = "song:${song.id}", song = song, index = index + 1))
+                    }
+                }
+            }
+        }
+    }
 
     GlowBackground(
         showTopGlow = true,
@@ -75,7 +119,7 @@ fun LibraryScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                contentPadding = PaddingValues(top = 48.dp, bottom = 120.dp)
+                contentPadding = PaddingValues(top = 48.dp, bottom = if (playbackSummary.first != null) 180.dp else 100.dp)
             ) {
                 // Header with title and shuffle all
                 item {
@@ -111,58 +155,68 @@ fun LibraryScreen(
 
                 item { Spacer(modifier = Modifier.height(18.dp)) }
 
-                // Category Filter Pills: All, Artists, Albums, Genres, Playlists
-                item {
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 20.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        items(LibraryTab.values()) { tab ->
-                            CategoryPill(
-                                text = tab.title,
-                                isSelected = tab == selectedTab,
-                                onClick = { viewModel.selectTab(tab) }
-                            )
+                if (songs.isEmpty()) {
+                    item { EmptyLibraryCard(hasPermission, requestPermission, viewModel::rescan) }
+                } else {
+                    item {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 20.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            items(LibraryTab.values()) { tab ->
+                                CategoryPill(
+                                    text = tab.title,
+                                    isSelected = tab == selectedTab,
+                                    onClick = { viewModel.selectTab(tab) }
+                                )
+                            }
                         }
                     }
+                    item { Spacer(modifier = Modifier.height(20.dp)) }
                 }
 
-                item { Spacer(modifier = Modifier.height(20.dp)) }
-
-                // Song List
-                itemsIndexed(songs) { index, song ->
-                    val isCurrent = playbackState.currentSong?.id == song.id
-                    SongListItem(
-                        index = index + 1,
-                        song = song,
-                        isPlaying = isCurrent && playbackState.isPlaying,
-                        onClick = { viewModel.playSong(song) }
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
+                // A single lazy row stream keeps even very large artist/album groups virtualized.
+                items(libraryRows, key = { it.key }) { row ->
+                    val sectionTitle = row.sectionTitle
+                    val song = row.song
+                    if (sectionTitle != null) {
+                        Text(
+                            text = sectionTitle,
+                            color = AmberGoldPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp)
+                        )
+                    } else if (song != null) {
+                        val isCurrent = playbackSummary.first == song.id
+                        SongListItem(
+                            index = row.index,
+                            song = song,
+                            isPlaying = isCurrent && playbackSummary.second,
+                            onClick = { viewModel.playSong(song) }
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
                 }
-            }
-
-            // Docked MiniPlayer
-            if (playbackState.currentSong != null) {
-                MiniPlayerBar(
-                    currentSong = playbackState.currentSong,
-                    isPlaying = playbackState.isPlaying,
-                    progress = playbackState.progress,
-                    onPlayPauseClick = { viewModel.playPause() },
-                    onNextClick = { viewModel.next() },
-                    onBarClick = onNavigateToNowPlaying
-                )
             }
         }
     }
 }
+
+private data class LibraryRow(
+    val key: String,
+    val sectionTitle: String? = null,
+    val song: Song? = null,
+    val index: Int = 0
+)
 
 @Composable
 fun SongListItem(
     index: Int,
     song: Song,
     isPlaying: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onRemoveFromList: (() -> Unit)? = null
 ) {
     val shape = RoundedCornerShape(16.dp)
 
@@ -172,6 +226,8 @@ fun SongListItem(
             .padding(horizontal = 20.dp),
         shape = shape,
         backgroundColor = if (isPlaying) Color(0xFF261A12) else Color(0xFF1E140E).copy(alpha = 0.6f),
+        borderBrush = SolidColor(if (isPlaying) Color(0x99F5B853) else Color(0x554B3926)),
+        elevation = 1.dp,
         onClick = onClick
     ) {
         Row(
@@ -263,18 +319,7 @@ fun SongListItem(
                 fontWeight = FontWeight.Medium
             )
 
-            // More options
-            IconButton(
-                onClick = { /* Menu */ },
-                modifier = Modifier.size(32.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.MoreVert,
-                    contentDescription = "Options",
-                    tint = TextMuted,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
+            SongOptionsButton(song, modifier = Modifier.size(32.dp), onRemoveFromList = onRemoveFromList)
         }
     }
 }

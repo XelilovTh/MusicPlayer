@@ -35,18 +35,21 @@ fun VinylRecordView(
     size: Dp = 140.dp,
     isPlaying: Boolean = true
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "vinyl_spin")
-    val rotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(12000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "vinyl_rotation"
-    )
-
-    val currentRotation = if (isPlaying) rotation else 0f
+    val currentRotation = if (isPlaying) {
+        val infiniteTransition = rememberInfiniteTransition(label = "vinyl_spin")
+        val rotation by infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(12000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "vinyl_rotation"
+        )
+        rotation
+    } else {
+        0f
+    }
 
     Box(
         modifier = modifier

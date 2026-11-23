@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,7 +24,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.ripple.rememberRipple
 import androidx.compose.material3.Icon
@@ -46,7 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tehmaz.musicplayer.ui.components.GlowBackground
-import com.tehmaz.musicplayer.ui.components.MiniPlayerBar
+import com.tehmaz.musicplayer.ui.components.rememberPlaybackSummary
 import com.tehmaz.musicplayer.ui.screens.library.SongListItem
 import com.tehmaz.musicplayer.ui.theme.AmberGoldPrimary
 import com.tehmaz.musicplayer.ui.theme.GlassBorderGradient
@@ -58,12 +56,11 @@ import org.koin.androidx.compose.koinViewModel
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SearchScreen(
-    onNavigateToNowPlaying: () -> Unit,
     viewModel: SearchViewModel = koinViewModel()
 ) {
     val query by viewModel.query.collectAsState()
     val searchResults by viewModel.searchResults.collectAsState()
-    val playbackState by viewModel.playbackState.collectAsState()
+    val playbackSummary = rememberPlaybackSummary(viewModel.playbackState)
 
     GlowBackground(
         showTopGlow = true,
@@ -75,7 +72,7 @@ fun SearchScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                contentPadding = PaddingValues(top = 48.dp, bottom = 120.dp)
+                contentPadding = PaddingValues(top = 48.dp, bottom = if (playbackSummary.first != null) 180.dp else 100.dp)
             ) {
                 // Title
                 item {
@@ -160,47 +157,12 @@ fun SearchScreen(
 
                 item { Spacer(modifier = Modifier.height(20.dp)) }
 
-                // Recent Searches Tag Pills
-                item {
-                    Column(modifier = Modifier.padding(horizontal = 20.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Rounded.History,
-                                contentDescription = null,
-                                tint = AmberGoldPrimary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Recent Searches",
-                                color = TextSecondary,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            viewModel.recentTags.forEach { tag ->
-                                SearchTagPill(
-                                    tag = tag,
-                                    onClick = { viewModel.selectTag(tag) }
-                                )
-                            }
-                        }
-                    }
-                }
-
-                item { Spacer(modifier = Modifier.height(24.dp)) }
+                item { Spacer(modifier = Modifier.height(20.dp)) }
 
                 // Results section header
                 item {
                     Text(
-                        text = if (query.isBlank()) "Recommended For You" else "Results (${searchResults.size})",
+                        text = if (query.isBlank()) "Your Music" else "Results (${searchResults.size})",
                         color = TextPrimary,
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
@@ -211,28 +173,16 @@ fun SearchScreen(
                 item { Spacer(modifier = Modifier.height(12.dp)) }
 
                 // Search Results
-                itemsIndexed(searchResults) { index, song ->
-                    val isCurrent = playbackState.currentSong?.id == song.id
+                itemsIndexed(searchResults, key = { _, song -> song.id }) { index, song ->
+                    val isCurrent = playbackSummary.first == song.id
                     SongListItem(
                         index = index + 1,
                         song = song,
-                        isPlaying = isCurrent && playbackState.isPlaying,
+                        isPlaying = isCurrent && playbackSummary.second,
                         onClick = { viewModel.playSong(song) }
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
-            }
-
-            // Docked MiniPlayer
-            if (playbackState.currentSong != null) {
-                MiniPlayerBar(
-                    currentSong = playbackState.currentSong,
-                    isPlaying = playbackState.isPlaying,
-                    progress = playbackState.progress,
-                    onPlayPauseClick = { viewModel.playPause() },
-                    onNextClick = { viewModel.next() },
-                    onBarClick = onNavigateToNowPlaying
-                )
             }
         }
     }

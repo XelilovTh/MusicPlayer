@@ -4,6 +4,8 @@ import com.tehmaz.musicplayer.data.model.PlaybackState
 import com.tehmaz.musicplayer.data.model.Playlist
 import com.tehmaz.musicplayer.data.model.Song
 import com.tehmaz.musicplayer.data.repository.AudioRepository
+import com.tehmaz.musicplayer.data.store.FavoritesStore
+import com.tehmaz.musicplayer.data.store.UserPlaylistStore
 import com.tehmaz.musicplayer.playback.AudioPlaybackManager
 import com.tehmaz.musicplayer.ui.screens.home.HomeViewModel
 import com.tehmaz.musicplayer.ui.screens.library.LibraryTab
@@ -67,7 +69,7 @@ class ViewModelTest {
 
     @Test
     fun testNowPlayingViewModelPlaybackActions() {
-        val viewModel = NowPlayingViewModel(playbackManager)
+        val viewModel = NowPlayingViewModel(playbackManager, FavoritesStore())
 
         viewModel.playPause()
         verify(exactly = 1) { playbackManager.playPause() }
@@ -90,14 +92,15 @@ class ViewModelTest {
 
     @Test
     fun testNowPlayingViewModelFavoriteToggle() {
-        val viewModel = NowPlayingViewModel(playbackManager)
-        assertFalse(viewModel.isFavorite.value)
+        playbackStateFlow.value = PlaybackState(currentSong = testSong1)
+        val viewModel = NowPlayingViewModel(playbackManager, FavoritesStore())
+        assertFalse(testSong1.id in viewModel.favoriteIds.value)
 
         viewModel.toggleFavorite()
-        assertTrue(viewModel.isFavorite.value)
+        assertTrue(testSong1.id in viewModel.favoriteIds.value)
 
         viewModel.toggleFavorite()
-        assertFalse(viewModel.isFavorite.value)
+        assertFalse(testSong1.id in viewModel.favoriteIds.value)
     }
 
     // =========================================================================
@@ -147,14 +150,11 @@ class ViewModelTest {
         viewModel.selectTab(LibraryTab.ALBUMS)
         assertEquals(LibraryTab.ALBUMS, viewModel.selectedTab.value)
 
-        viewModel.selectTab(LibraryTab.GENRES)
-        assertEquals(LibraryTab.GENRES, viewModel.selectedTab.value)
-
         viewModel.selectTab(LibraryTab.ARTISTS)
         assertEquals(LibraryTab.ARTISTS, viewModel.selectedTab.value)
 
-        viewModel.selectTab(LibraryTab.PLAYLISTS)
-        assertEquals(LibraryTab.PLAYLISTS, viewModel.selectedTab.value)
+        // Playlists are exposed as data, not as a LibraryTab.
+        assertEquals(1, viewModel.playlists.value.size)
     }
 
     @Test
@@ -184,14 +184,14 @@ class ViewModelTest {
         val viewModel = SearchViewModel(repository, playbackManager)
         advanceUntilIdle()
 
-        // Initially recommended songs
+        // A blank query shows all songs found on the device.
         assertEquals(2, viewModel.searchResults.value.size)
 
         // Query change with non-blank
         viewModel.onQueryChange("Song 1")
         advanceUntilIdle()
-        coVerify { repository.searchSongs("Song 1") }
-        assertEquals(1, viewModel.searchResults.value.size)
+        coVerify(exactly = 1) { repository.searchSongs("Song 1") }
+        assertEquals(listOf(testSong1), viewModel.searchResults.value)
 
         // Query change with blank resets to initial
         viewModel.onQueryChange("")
@@ -200,17 +200,18 @@ class ViewModelTest {
     }
 
     @Test
-    fun testSearchViewModelTagSelectionAndPlayback() = runTest(testDispatcher) {
+    fun testSearchViewModelQueryAndPlayback() = runTest(testDispatcher) {
         val viewModel = SearchViewModel(repository, playbackManager)
         advanceUntilIdle()
 
-        viewModel.selectTag("Lofi")
+        viewModel.onQueryChange("Song 1")
         advanceUntilIdle()
-        assertEquals("Lofi", viewModel.query.value)
-        coVerify { repository.searchSongs("Lofi") }
+        assertEquals("Song 1", viewModel.query.value)
+        assertEquals(listOf(testSong1), viewModel.searchResults.value)
+        coVerify(exactly = 1) { repository.searchSongs("Song 1") }
 
         viewModel.playSong(testSong1)
-        verify { playbackManager.playSong(testSong1, any()) }
+        verify { playbackManager.playSong(testSong1, listOf(testSong1)) }
 
         viewModel.playPause()
         verify { playbackManager.playPause() }
@@ -225,7 +226,7 @@ class ViewModelTest {
 
     @Test
     fun testPlaylistViewModelLoadAndPlayback() = runTest(testDispatcher) {
-        val viewModel = PlaylistViewModel(repository, playbackManager)
+        val viewModel = PlaylistViewModel(repository, playbackManager, UserPlaylistStore())
 
         viewModel.loadPlaylist(1L)
         advanceUntilIdle()

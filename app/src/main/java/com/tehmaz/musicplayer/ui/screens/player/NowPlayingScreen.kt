@@ -24,13 +24,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlaylistAdd
@@ -49,10 +47,11 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -71,6 +70,8 @@ import coil.compose.AsyncImage
 import com.tehmaz.musicplayer.data.model.PlaybackState
 import com.tehmaz.musicplayer.data.model.RepeatMode
 import com.tehmaz.musicplayer.ui.components.GlassIconButton
+import com.tehmaz.musicplayer.ui.components.rememberPlaybackControls
+import com.tehmaz.musicplayer.ui.components.AddToPlaylistDialogHost
 import com.tehmaz.musicplayer.ui.components.GlowBackground
 import com.tehmaz.musicplayer.ui.theme.AmberGoldDark
 import com.tehmaz.musicplayer.ui.theme.AmberGoldLight
@@ -80,6 +81,9 @@ import com.tehmaz.musicplayer.ui.theme.GoldenAmberGradient
 import com.tehmaz.musicplayer.ui.theme.TextMuted
 import com.tehmaz.musicplayer.ui.theme.TextPrimary
 import com.tehmaz.musicplayer.ui.theme.TextSecondary
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import org.koin.androidx.compose.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -91,10 +95,12 @@ fun NowPlayingScreen(
     onNavigateToSettings: () -> Unit,
     viewModel: NowPlayingViewModel = koinViewModel()
 ) {
-    val playbackState by viewModel.playbackState.collectAsState()
-    val isFavorite by viewModel.isFavorite.collectAsState()
+    val playbackControls = rememberPlaybackControls(viewModel.playbackState)
+    val favoriteIds by viewModel.favoriteIds.collectAsState()
 
-    val song = playbackState.currentSong
+    val song = playbackControls.currentSong
+    val isFavorite = song?.let { it.id in favoriteIds } == true
+    var showAddToPlaylist by remember { mutableStateOf(false) }
     var sliderPosition by remember { mutableFloatStateOf(0f) }
     var isUserDragging by remember { androidx.compose.runtime.mutableStateOf(false) }
 
@@ -209,7 +215,7 @@ fun NowPlayingScreen(
 
                 // Add to playlist icon
                 IconButton(
-                    onClick = { /* Add to playlist */ },
+                    onClick = { if (song != null) showAddToPlaylist = true },
                     modifier = Modifier.size(40.dp)
                 ) {
                     Icon(
@@ -229,6 +235,7 @@ fun NowPlayingScreen(
                 )
 
                 IconButton(
+                    enabled = song != null,
                     onClick = { viewModel.toggleFavorite() },
                     modifier = Modifier.size(40.dp)
                 ) {
@@ -241,55 +248,17 @@ fun NowPlayingScreen(
                 }
             }
 
+            if (showAddToPlaylist && song != null) {
+                AddToPlaylistDialogHost(song = song, onDismiss = { showAddToPlaylist = false })
+            }
+
             Spacer(modifier = Modifier.height(20.dp))
 
-            // 4. Interactive Progress Slider with mm:ss Timestamps
-            val currentProgress = if (isUserDragging) sliderPosition else playbackState.progress
-
-            Slider(
-                value = currentProgress,
-                onValueChange = { pos ->
-                    isUserDragging = true
-                    sliderPosition = pos
-                },
-                onValueChangeFinished = {
-                    isUserDragging = false
-                    val seekTarget = (sliderPosition * playbackState.totalDurationMs).toLong()
-                    viewModel.seekTo(seekTarget)
-                },
-                colors = SliderDefaults.colors(
-                    thumbColor = AmberGoldLight,
-                    activeTrackColor = AmberGoldPrimary,
-                    inactiveTrackColor = Color(0x33F5B853)
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp)
+            // Position updates are isolated so the artwork and transport controls do not recompose.
+            PlaybackProgressControls(
+                playbackState = viewModel.playbackState,
+                onSeek = viewModel::seekTo
             )
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = if (isUserDragging) {
-                        PlaybackState.formatTime((sliderPosition * playbackState.totalDurationMs).toLong())
-                    } else {
-                        playbackState.formattedPosition
-                    },
-                    color = TextSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    text = playbackState.formattedDuration,
-                    color = TextSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -309,7 +278,7 @@ fun NowPlayingScreen(
                     Icon(
                         imageVector = Icons.Rounded.Shuffle,
                         contentDescription = "Shuffle",
-                        tint = if (playbackState.isShuffle) AmberGoldPrimary else TextMuted,
+                        tint = if (playbackControls.isShuffle) AmberGoldPrimary else TextMuted,
                         modifier = Modifier.size(24.dp)
                     )
                 }
@@ -347,8 +316,8 @@ fun NowPlayingScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = if (playbackState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = if (playbackState.isPlaying) "Pause" else "Play",
+                        imageVector = if (playbackControls.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        contentDescription = if (playbackControls.isPlaying) "Pause" else "Play",
                         tint = Color(0xFF140E0A),
                         modifier = Modifier.size(36.dp)
                     )
@@ -372,12 +341,12 @@ fun NowPlayingScreen(
                     onClick = { viewModel.toggleRepeat() },
                     modifier = Modifier.size(44.dp)
                 ) {
-                    val repeatIcon = if (playbackState.repeatMode == RepeatMode.ONE) {
+                    val repeatIcon = if (playbackControls.repeatMode == RepeatMode.ONE) {
                         Icons.Rounded.RepeatOne
                     } else {
                         Icons.Rounded.Repeat
                     }
-                    val repeatTint = if (playbackState.repeatMode != RepeatMode.OFF) {
+                    val repeatTint = if (playbackControls.repeatMode != RepeatMode.OFF) {
                         AmberGoldPrimary
                     } else {
                         TextMuted
@@ -395,12 +364,72 @@ fun NowPlayingScreen(
 
             // 6. Bottom Frosted Glass Action Dock: Lyrics, EQ, Sleep Timer, Settings
             BottomGlassActionDock(
-                onLyricsClick = { /* Show Lyrics */ },
                 onEQClick = onNavigateToEQ,
                 onSleepTimerClick = onNavigateToSleepTimer,
                 onSettingsClick = onNavigateToSettings
             )
         }
+    }
+}
+
+@Composable
+private fun PlaybackProgressControls(
+    playbackState: StateFlow<PlaybackState>,
+    onSeek: (Long) -> Unit
+) {
+    val positionFlow = remember(playbackState) {
+        playbackState
+            .map { it.currentPositionMs to it.totalDurationMs }
+            .distinctUntilChanged()
+    }
+    val initial = playbackState.value
+    val (positionMs, durationMs) = positionFlow.collectAsState(
+        initial = initial.currentPositionMs to initial.totalDurationMs
+    ).value
+
+    var sliderPosition by remember { mutableFloatStateOf(0f) }
+    var isUserDragging by remember { mutableStateOf(false) }
+    val progress = if (durationMs > 0L) {
+        (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+    } else 0f
+    val currentProgress = if (isUserDragging) sliderPosition else progress
+
+    Spacer(modifier = Modifier.height(20.dp))
+    Slider(
+        value = currentProgress,
+        onValueChange = { value ->
+            isUserDragging = true
+            sliderPosition = value
+        },
+        onValueChangeFinished = {
+            isUserDragging = false
+            onSeek((sliderPosition * durationMs).toLong())
+        },
+        colors = SliderDefaults.colors(
+            thumbColor = AmberGoldLight,
+            activeTrackColor = AmberGoldPrimary,
+            inactiveTrackColor = Color(0x33F5B853)
+        ),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = if (isUserDragging) {
+                PlaybackState.formatTime((sliderPosition * durationMs).toLong())
+            } else PlaybackState.formatTime(positionMs),
+            color = TextSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium
+        )
+        Text(
+            text = PlaybackState.formatTime(durationMs),
+            color = TextSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 
@@ -448,17 +477,7 @@ private fun NowPlayingHeader(
             )
         }
 
-        GlassIconButton(
-            onClick = { /* Menu */ },
-            size = 40.dp
-        ) {
-            Icon(
-                imageVector = Icons.Default.MoreVert,
-                contentDescription = "More",
-                tint = TextPrimary,
-                modifier = Modifier.size(20.dp)
-            )
-        }
+        Spacer(modifier = Modifier.size(40.dp))
     }
 }
 
@@ -468,7 +487,6 @@ private fun NowPlayingHeader(
  */
 @Composable
 private fun BottomGlassActionDock(
-    onLyricsClick: () -> Unit,
     onEQClick: () -> Unit,
     onSleepTimerClick: () -> Unit,
     onSettingsClick: () -> Unit
@@ -494,11 +512,6 @@ private fun BottomGlassActionDock(
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            DockActionButton(
-                icon = Icons.Rounded.Lyrics,
-                label = "Lyrics",
-                onClick = onLyricsClick
-            )
             DockActionButton(
                 icon = Icons.Rounded.GraphicEq,
                 label = "EQ",

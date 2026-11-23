@@ -6,38 +6,53 @@ import com.tehmaz.musicplayer.data.model.PlaybackState
 import com.tehmaz.musicplayer.data.model.Playlist
 import com.tehmaz.musicplayer.data.model.Song
 import com.tehmaz.musicplayer.data.repository.AudioRepository
+import com.tehmaz.musicplayer.data.store.LibraryEvents
+import com.tehmaz.musicplayer.data.store.UserPlaylistStore
 import com.tehmaz.musicplayer.playback.AudioPlaybackManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 class PlaylistViewModel(
     private val repository: AudioRepository,
-    private val playbackManager: AudioPlaybackManager
+    private val playbackManager: AudioPlaybackManager,
+    private val userPlaylists: UserPlaylistStore
 ) : ViewModel() {
 
     val playbackState: StateFlow<PlaybackState> = playbackManager.playbackState
-
     private val _playlist = MutableStateFlow<Playlist?>(null)
     val playlist: StateFlow<Playlist?> = _playlist.asStateFlow()
-
     private val _songs = MutableStateFlow<List<Song>>(emptyList())
     val songs: StateFlow<List<Song>> = _songs.asStateFlow()
+    private val _playlists = MutableStateFlow<List<Playlist>>(emptyList())
+    val playlists: StateFlow<List<Playlist>> = _playlists.asStateFlow()
+    private var currentPlaylistId: Long = 1L
+
+    init {
+        viewModelScope.launch {
+            LibraryEvents.changes.drop(1).collectLatest { loadPlaylistData(currentPlaylistId) }
+        }
+    }
 
     fun loadPlaylist(playlistId: Long) {
-        viewModelScope.launch {
-            val pl = repository.getPlaylistById(playlistId) ?: repository.getPlaylists().firstOrNull()
-            _playlist.value = pl
-            _songs.value = pl?.songs ?: repository.getSongs()
-        }
+        currentPlaylistId = playlistId
+        viewModelScope.launch { loadPlaylistData(playlistId) }
+    }
+
+    private suspend fun loadPlaylistData(playlistId: Long) {
+        val allPlaylists = repository.getPlaylists()
+        _playlists.value = allPlaylists.filter { userPlaylists.isUserPlaylist(it.id) }
+        val pl = allPlaylists.firstOrNull { it.id == playlistId }
+        _playlist.value = pl
+        _songs.value = pl?.songs.orEmpty()
     }
 
     fun playAll() {
         val list = _songs.value
-        if (list.isNotEmpty()) {
-            playbackManager.playSong(list.first(), list)
-        }
+        if (list.isNotEmpty()) playbackManager.playSong(list.first(), list)
     }
 
     fun shuffleAll() {
@@ -48,15 +63,22 @@ class PlaylistViewModel(
         }
     }
 
-    fun playSong(song: Song) {
-        playbackManager.playSong(song, _songs.value)
+    fun isUserPlaylist(): Boolean = userPlaylists.isUserPlaylist(currentPlaylistId)
+
+    fun removeSong(songId: Long) {
+        if (!isUserPlaylist()) return
+        userPlaylists.removeSong(currentPlaylistId, songId)
+        // Update the visible list immediately; LibraryEvents reloads the persisted playlist once.
+        val updatedSongs = _songs.value.filterNot { it.id == songId }
+        _songs.value = updatedSongs
+        _playlist.value = _playlist.value?.copy(
+            songCount = updatedSongs.size,
+            coverArtUrl = updatedSongs.firstOrNull { !it.albumArtUri.isNullOrEmpty() }?.albumArtUri,
+            songs = updatedSongs
+        )
     }
 
-    fun playPause() {
-        playbackManager.playPause()
-    }
-
-    fun next() {
-        playbackManager.next()
-    }
+    fun playSong(song: Song) = playbackManager.playSong(song, _songs.value)
+    fun playPause() = playbackManager.playPause()
+    fun next() = playbackManager.next()
 }

@@ -35,10 +35,16 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -53,11 +59,13 @@ import coil.compose.AsyncImage
 import com.tehmaz.musicplayer.data.model.Playlist
 import com.tehmaz.musicplayer.data.model.Song
 import com.tehmaz.musicplayer.ui.components.DiscoverBadge
+import com.tehmaz.musicplayer.ui.components.EmptyLibraryCard
+import com.tehmaz.musicplayer.ui.components.rememberPermissionRequester
 import com.tehmaz.musicplayer.ui.components.GlassIconButton
 import com.tehmaz.musicplayer.ui.components.GlassmorphicCard
 import com.tehmaz.musicplayer.ui.components.GlowBackground
+import com.tehmaz.musicplayer.ui.components.rememberPlaybackSummary
 import com.tehmaz.musicplayer.ui.components.GoldenPillButton
-import com.tehmaz.musicplayer.ui.components.MiniPlayerBar
 import com.tehmaz.musicplayer.ui.components.VinylRecordView
 import com.tehmaz.musicplayer.ui.theme.AmberGoldDark
 import com.tehmaz.musicplayer.ui.theme.AmberGoldLight
@@ -73,13 +81,32 @@ fun HomeScreen(
     onNavigateToSearch: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToPlaylist: (Long) -> Unit,
-    onNavigateToNowPlaying: () -> Unit,
     onNavigateToLibrary: () -> Unit,
     viewModel: HomeViewModel = koinViewModel()
 ) {
-    val playbackState by viewModel.playbackState.collectAsState()
+    val playbackSummary = rememberPlaybackSummary(viewModel.playbackState)
     val recentSongs by viewModel.recentSongs.collectAsState()
     val playlists by viewModel.playlists.collectAsState()
+    val allSongs by viewModel.allSongs.collectAsState()
+    var hasPermission by remember { mutableStateOf(viewModel.hasPermission()) }
+    val requestPermission = rememberPermissionRequester {
+        hasPermission = viewModel.hasPermission()
+        viewModel.rescan()
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val permissionNowGranted = viewModel.hasPermission()
+                if (!hasPermission && permissionNowGranted) viewModel.rescan()
+                else viewModel.refresh()
+                hasPermission = permissionNowGranted
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     GlowBackground(
         showTopGlow = true,
@@ -93,13 +120,13 @@ fun HomeScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                contentPadding = PaddingValues(top = 48.dp, bottom = 120.dp)
+                contentPadding = PaddingValues(top = 48.dp, bottom = if (playbackSummary.first != null) 180.dp else 100.dp)
             ) {
                 // 1. Top Header with User Greeting
                 item {
                     HomeTopHeader(
-                        userName = "Tehmaz 👋",
-                        greeting = "Good Morning",
+                        title = "Your Music",
+                        greeting = "Listen offline, anytime",
                         onSearchClick = onNavigateToSearch,
                         onSettingsClick = onNavigateToSettings
                     )
@@ -107,18 +134,20 @@ fun HomeScreen(
 
                 item { Spacer(modifier = Modifier.height(20.dp)) }
 
-                // 2. Glowing Hero Vinyl Card
-                item {
-                    HeroVinylCard(
-                        isPlaying = playbackState.isPlaying,
-                        onPlayClick = { viewModel.playHeroCard() }
-                    )
+                if (allSongs.isEmpty()) {
+                    item { EmptyLibraryCard(hasPermission, requestPermission, viewModel::rescan) }
+                } else {
+                    item {
+                        HeroVinylCard(
+                            isPlaying = playbackSummary.second,
+                            onPlayClick = { viewModel.playHeroCard() }
+                        )
+                    }
                 }
 
-                item { Spacer(modifier = Modifier.height(28.dp)) }
+                if (allSongs.isNotEmpty()) item { Spacer(modifier = Modifier.height(28.dp)) }
 
-                // 3. Recently Played Section Header
-                item {
+                if (recentSongs.isNotEmpty()) item { // Recently played section
                     SectionHeader(
                         title = "Recently Played",
                         actionText = "See All",
@@ -126,57 +155,43 @@ fun HomeScreen(
                     )
                 }
 
-                item { Spacer(modifier = Modifier.height(14.dp)) }
-
-                // Recently Played Horizontal Cards
-                item {
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 20.dp),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        items(recentSongs) { song ->
-                            RecentlyPlayedCard(
-                                song = song,
-                                isCurrentPlaying = playbackState.currentSong?.id == song.id && playbackState.isPlaying,
-                                onClick = { viewModel.playSong(song, recentSongs) }
+                if (allSongs.isNotEmpty()) {
+                    if (recentSongs.isNotEmpty()) {
+                        item { Spacer(modifier = Modifier.height(14.dp)) }
+                        item {
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = 20.dp),
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                items(recentSongs, key = { it.id }) { song ->
+                                    RecentlyPlayedCard(
+                                        song = song,
+                                        isCurrentPlaying = playbackSummary.first == song.id && playbackSummary.second,
+                                        onClick = { viewModel.playSong(song, recentSongs) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (playlists.isNotEmpty()) {
+                        item { Spacer(modifier = Modifier.height(30.dp)) }
+                        item {
+                            SectionHeader(
+                                title = "Your Playlists",
+                                actionText = "See All",
+                                onActionClick = onNavigateToLibrary
                             )
+                        }
+                        item { Spacer(modifier = Modifier.height(14.dp)) }
+                        items(playlists, key = { it.id }) { playlist ->
+                            PlaylistItemCard(
+                                playlist = playlist,
+                                onClick = { onNavigateToPlaylist(playlist.id) }
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
                         }
                     }
                 }
-
-                item { Spacer(modifier = Modifier.height(30.dp)) }
-
-                // 4. Your Playlists Section Header
-                item {
-                    SectionHeader(
-                        title = "Your Playlists",
-                        actionText = "See All",
-                        onActionClick = onNavigateToLibrary
-                    )
-                }
-
-                item { Spacer(modifier = Modifier.height(14.dp)) }
-
-                // Playlists Vertical List
-                items(playlists) { playlist ->
-                    PlaylistItemCard(
-                        playlist = playlist,
-                        onClick = { onNavigateToPlaylist(playlist.id) }
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                }
-            }
-
-            // Docked MiniPlayer above navigation
-            if (playbackState.currentSong != null) {
-                MiniPlayerBar(
-                    currentSong = playbackState.currentSong,
-                    isPlaying = playbackState.isPlaying,
-                    progress = playbackState.progress,
-                    onPlayPauseClick = { viewModel.playPause() },
-                    onNextClick = { viewModel.next() },
-                    onBarClick = onNavigateToNowPlaying
-                )
             }
         }
     }
@@ -187,7 +202,7 @@ fun HomeScreen(
  */
 @Composable
 private fun HomeTopHeader(
-    userName: String,
+    title: String,
     greeting: String,
     onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit
@@ -226,7 +241,7 @@ private fun HomeTopHeader(
 
         Spacer(modifier = Modifier.width(14.dp))
 
-        // Greeting and Username
+        // App title and short offline-first description
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = greeting,
@@ -236,7 +251,7 @@ private fun HomeTopHeader(
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = userName,
+                text = title,
                 color = TextPrimary,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold
