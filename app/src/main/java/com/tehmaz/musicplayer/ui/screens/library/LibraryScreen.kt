@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MusicNote
@@ -42,6 +41,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -89,18 +89,24 @@ fun LibraryScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    val visibleSongs = remember(songs, selectedTab) {
-        when (selectedTab) {
-            LibraryTab.ALL -> songs
-            LibraryTab.ARTISTS -> songs.sortedBy { it.artist.lowercase() + it.title.lowercase() }
-            LibraryTab.ALBUMS -> songs.sortedBy { it.album.lowercase() + it.title.lowercase() }
+    val libraryRows = remember(songs, selectedTab) {
+        if (selectedTab == LibraryTab.ALL) {
+            songs.mapIndexed { index, song ->
+                LibraryRow(key = "song:${song.id}", song = song, index = index + 1)
+            }
+        } else {
+            val groups = songs.groupBy {
+                if (selectedTab == LibraryTab.ARTISTS) it.artist else it.album
+            }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
+            buildList {
+                groups.forEach { (groupName, groupSongs) ->
+                    add(LibraryRow(key = "header:$groupName", sectionTitle = groupName))
+                    groupSongs.sortedBy { it.title.lowercase() }.forEachIndexed { index, song ->
+                        add(LibraryRow(key = "song:${song.id}", song = song, index = index + 1))
+                    }
+                }
+            }
         }
-    }
-    val groupedSongs = remember(visibleSongs, selectedTab) {
-        if (selectedTab == LibraryTab.ALL) emptyList()
-        else visibleSongs.groupBy {
-            if (selectedTab == LibraryTab.ARTISTS) it.artist else it.album
-        }.toSortedMap(String.CASE_INSENSITIVE_ORDER).entries.toList()
     }
 
     GlowBackground(
@@ -169,45 +175,40 @@ fun LibraryScreen(
                     item { Spacer(modifier = Modifier.height(20.dp)) }
                 }
 
-                // Real local tracks, grouped by artist or album when those tabs are selected.
-                if (selectedTab == LibraryTab.ALL) {
-                    itemsIndexed(visibleSongs, key = { _, song -> song.id }) { index, song ->
+                // A single lazy row stream keeps even very large artist/album groups virtualized.
+                items(libraryRows, key = { it.key }) { row ->
+                    val sectionTitle = row.sectionTitle
+                    val song = row.song
+                    if (sectionTitle != null) {
+                        Text(
+                            text = sectionTitle,
+                            color = AmberGoldPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp)
+                        )
+                    } else if (song != null) {
                         val isCurrent = playbackSummary.first == song.id
                         SongListItem(
-                            index = index + 1,
+                            index = row.index,
                             song = song,
                             isPlaying = isCurrent && playbackSummary.second,
                             onClick = { viewModel.playSong(song) }
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                     }
-                } else {
-                    items(groupedSongs, key = { it.key }) { group ->
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            Text(
-                                text = group.key,
-                                color = AmberGoldPrimary,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp)
-                            )
-                            group.value.forEachIndexed { index, song ->
-                                val isCurrent = playbackSummary.first == song.id
-                                SongListItem(
-                                    index = index + 1,
-                                    song = song,
-                                    isPlaying = isCurrent && playbackSummary.second,
-                                    onClick = { viewModel.playSong(song) }
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                            }
-                        }
-                    }
                 }
             }
         }
     }
 }
+
+private data class LibraryRow(
+    val key: String,
+    val sectionTitle: String? = null,
+    val song: Song? = null,
+    val index: Int = 0
+)
 
 @Composable
 fun SongListItem(
@@ -225,6 +226,8 @@ fun SongListItem(
             .padding(horizontal = 20.dp),
         shape = shape,
         backgroundColor = if (isPlaying) Color(0xFF261A12) else Color(0xFF1E140E).copy(alpha = 0.6f),
+        borderBrush = SolidColor(if (isPlaying) Color(0x99F5B853) else Color(0x554B3926)),
+        elevation = 1.dp,
         onClick = onClick
     ) {
         Row(

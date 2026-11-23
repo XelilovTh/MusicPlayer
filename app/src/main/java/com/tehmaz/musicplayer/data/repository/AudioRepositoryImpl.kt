@@ -12,13 +12,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.util.concurrent.TimeUnit
 
 /** Repository backed exclusively by MediaStore. No sample or placeholder catalog is used. */
 class AudioRepositoryImpl(
     private val scanner: AudioScanner,
     @Suppress("unused") private val context: Context,
     private val userPlaylists: UserPlaylistStore = UserPlaylistStore(),
-    private val history: HistoryStore = HistoryStore()
+    private val history: HistoryStore = HistoryStore(),
+    private val cacheClockNanos: () -> Long = System::nanoTime,
+    private val cacheTtlNanos: Long = TimeUnit.SECONDS.toNanos(30)
 ) : AudioRepository {
 
     companion object {
@@ -30,6 +33,7 @@ class AudioRepositoryImpl(
 
     private val mutex = Mutex()
     @Volatile private var cachedSongs: List<Song>? = null
+    @Volatile private var cacheCreatedAtNanos: Long = 0L
 
     override fun hasPermission(): Boolean = scanner.hasPermission()
 
@@ -37,12 +41,19 @@ class AudioRepositoryImpl(
         mutex.withLock {
             if (!scanner.hasPermission()) {
                 cachedSongs = null
+                cacheCreatedAtNanos = 0L
                 return@withContext emptyList()
             }
-            cachedSongs?.let { return@withContext it }
+            val now = cacheClockNanos()
+            cachedSongs?.let { cached ->
+                if (now - cacheCreatedAtNanos < cacheTtlNanos) {
+                    return@withContext cached
+                }
+            }
             val songs = scanner.scanLocalSongs()
             Log.d(TAG, "Loaded ${songs.size} songs from local storage.")
             cachedSongs = songs
+            cacheCreatedAtNanos = now
             songs
         }
     }
@@ -106,7 +117,10 @@ class AudioRepositoryImpl(
     }
 
     override suspend fun refresh() {
-        mutex.withLock { cachedSongs = null }
+        mutex.withLock {
+            cachedSongs = null
+            cacheCreatedAtNanos = 0L
+        }
         LibraryEvents.notifyChanged()
     }
 

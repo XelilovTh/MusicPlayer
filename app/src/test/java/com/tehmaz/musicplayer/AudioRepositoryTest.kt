@@ -78,6 +78,25 @@ class AudioRepositoryTest {
     }
 
     @Test
+    fun getSongs_rescansAfterCacheExpires() = runTest {
+        var nowNanos = 0L
+        val expiringRepository = AudioRepositoryImpl(
+            scanner = scanner,
+            context = context,
+            userPlaylists = userPlaylists,
+            history = history,
+            cacheClockNanos = { nowNanos },
+            cacheTtlNanos = 10L
+        )
+
+        expiringRepository.getSongs()
+        nowNanos = 11L
+        expiringRepository.getSongs()
+
+        coVerify(exactly = 2) { scanner.scanLocalSongs() }
+    }
+
+    @Test
     fun getSongs_whenDeviceHasNoMusic_isEmpty() = runTest {
         coEvery { scanner.scanLocalSongs() } returns emptyList()
 
