@@ -33,19 +33,21 @@ class PlaylistViewModel(
 
     init {
         viewModelScope.launch {
-            LibraryEvents.changes.drop(1).collectLatest { loadPlaylist(currentPlaylistId) }
+            LibraryEvents.changes.drop(1).collectLatest { loadPlaylistData(currentPlaylistId) }
         }
     }
 
     fun loadPlaylist(playlistId: Long) {
         currentPlaylistId = playlistId
-        viewModelScope.launch {
-            val allPlaylists = repository.getPlaylists()
-            _playlists.value = allPlaylists.filter { userPlaylists.isUserPlaylist(it.id) }
-            val pl = allPlaylists.firstOrNull { it.id == playlistId }
-            _playlist.value = pl
-            _songs.value = pl?.songs.orEmpty()
-        }
+        viewModelScope.launch { loadPlaylistData(playlistId) }
+    }
+
+    private suspend fun loadPlaylistData(playlistId: Long) {
+        val allPlaylists = repository.getPlaylists()
+        _playlists.value = allPlaylists.filter { userPlaylists.isUserPlaylist(it.id) }
+        val pl = allPlaylists.firstOrNull { it.id == playlistId }
+        _playlist.value = pl
+        _songs.value = pl?.songs.orEmpty()
     }
 
     fun playAll() {
@@ -66,7 +68,14 @@ class PlaylistViewModel(
     fun removeSong(songId: Long) {
         if (!isUserPlaylist()) return
         userPlaylists.removeSong(currentPlaylistId, songId)
-        loadPlaylist(currentPlaylistId)
+        // Update the visible list immediately; LibraryEvents reloads the persisted playlist once.
+        val updatedSongs = _songs.value.filterNot { it.id == songId }
+        _songs.value = updatedSongs
+        _playlist.value = _playlist.value?.copy(
+            songCount = updatedSongs.size,
+            coverArtUrl = updatedSongs.firstOrNull { !it.albumArtUri.isNullOrEmpty() }?.albumArtUri,
+            songs = updatedSongs
+        )
     }
 
     fun playSong(song: Song) = playbackManager.playSong(song, _songs.value)

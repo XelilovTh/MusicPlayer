@@ -31,17 +31,19 @@ class HomeViewModel(
     init {
         refresh()
         viewModelScope.launch {
-            LibraryEvents.changes.drop(1).collectLatest { refresh() }
+            LibraryEvents.changes.drop(1).collectLatest { loadData() }
         }
     }
 
     fun refresh() {
-        viewModelScope.launch {
-            val songs = repository.getSongs()
-            _allSongs.value = songs
-            _recentSongs.value = repository.getRecentSongs()
-            _playlists.value = repository.getPlaylists()
-        }
+        viewModelScope.launch { loadData() }
+    }
+
+    private suspend fun loadData() {
+        val songs = repository.getSongs()
+        _allSongs.value = songs
+        _recentSongs.value = repository.getRecentSongs()
+        _playlists.value = repository.getPlaylists()
     }
 
     fun hasPermission(): Boolean = repository.hasPermission()

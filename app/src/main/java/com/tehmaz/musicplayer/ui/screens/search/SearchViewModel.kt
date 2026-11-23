@@ -33,16 +33,19 @@ class SearchViewModel(
     init {
         refresh()
         viewModelScope.launch {
-            LibraryEvents.changes.drop(1).collectLatest { refresh() }
+            LibraryEvents.changes.drop(1).collectLatest { loadData() }
         }
     }
 
     fun refresh() {
-        viewModelScope.launch {
-            val songs = repository.getSongs()
-            _allSongs.value = songs
-            _searchResults.value = if (_query.value.isBlank()) songs else repository.searchSongs(_query.value)
-        }
+        viewModelScope.launch { loadData() }
+    }
+
+    private suspend fun loadData() {
+        val songs = repository.getSongs()
+        _allSongs.value = songs
+        val query = _query.value
+        _searchResults.value = if (query.isBlank()) songs else repository.searchSongs(query)
     }
 
     fun onQueryChange(newQuery: String) {

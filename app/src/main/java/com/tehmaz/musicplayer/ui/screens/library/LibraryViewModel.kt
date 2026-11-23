@@ -37,15 +37,17 @@ class LibraryViewModel(
     init {
         refresh()
         viewModelScope.launch {
-            LibraryEvents.changes.drop(1).collectLatest { refresh() }
+            LibraryEvents.changes.drop(1).collectLatest { loadData() }
         }
     }
 
     fun refresh() {
-        viewModelScope.launch {
-            _songs.value = repository.getSongs()
-            _playlists.value = repository.getPlaylists()
-        }
+        viewModelScope.launch { loadData() }
+    }
+
+    private suspend fun loadData() {
+        _songs.value = repository.getSongs()
+        _playlists.value = repository.getPlaylists()
     }
 
     fun hasPermission(): Boolean = repository.hasPermission()
