@@ -157,4 +157,58 @@ class AudioPlaybackManagerTest {
         // No exception thrown and can safely call release again
         assertNotNull(manager.playbackState)
     }
+
+    @Test
+    fun sleepTimer_countsDownAndPausesPlayback() {
+        manager.playSong(testSong1)
+        assertTrue(manager.playbackState.value.isPlaying)
+
+        manager.startSleepTimer(1)
+        testScope.testScheduler.runCurrent()
+        assertEquals(60_000L, manager.sleepTimerRemainingMs.value)
+
+        testScope.testScheduler.advanceTimeBy(30_000L)
+        testScope.testScheduler.runCurrent()
+        assertEquals(30_000L, manager.sleepTimerRemainingMs.value)
+        assertTrue(manager.playbackState.value.isPlaying)
+
+        testScope.testScheduler.advanceTimeBy(31_000L)
+        testScope.testScheduler.runCurrent()
+        assertNull(manager.sleepTimerRemainingMs.value)
+        assertFalse(manager.playbackState.value.isPlaying)
+    }
+
+    @Test
+    fun sleepTimer_cancelKeepsPlaying() {
+        manager.playSong(testSong1)
+        manager.startSleepTimer(5)
+        testScope.testScheduler.runCurrent()
+        assertNotNull(manager.sleepTimerRemainingMs.value)
+
+        manager.cancelSleepTimer()
+        testScope.testScheduler.advanceTimeBy(400_000L)
+        testScope.testScheduler.runCurrent()
+
+        assertNull(manager.sleepTimerRemainingMs.value)
+        assertTrue(manager.playbackState.value.isPlaying)
+    }
+
+    @Test
+    fun playSong_notifiesListenerAndClearsError() {
+        val started = mutableListOf<Long>()
+        manager.onSongStarted = { started.add(it.id) }
+
+        manager.playSong(testSong2, listOf(testSong1, testSong2))
+
+        assertEquals(listOf(2L), started)
+        assertNull(manager.playbackState.value.errorMessage)
+    }
+
+    @Test
+    fun playSong_whenQueueMissingSong_prependsIt() {
+        manager.playSong(testSong3, listOf(testSong1, testSong2))
+
+        assertEquals(testSong3, manager.currentPlaylist.value.first())
+        assertEquals(3, manager.currentPlaylist.value.size)
+    }
 }

@@ -1,8 +1,13 @@
 package com.tehmaz.musicplayer.di
 
+import com.tehmaz.musicplayer.audio.EqualizerController
 import com.tehmaz.musicplayer.data.repository.AudioRepository
 import com.tehmaz.musicplayer.data.repository.AudioRepositoryImpl
 import com.tehmaz.musicplayer.data.scanner.AudioScanner
+import com.tehmaz.musicplayer.data.store.FavoritesStore
+import com.tehmaz.musicplayer.data.store.HistoryStore
+import com.tehmaz.musicplayer.data.store.KeyValueStore
+import com.tehmaz.musicplayer.data.store.UserPlaylistStore
 import com.tehmaz.musicplayer.playback.AudioPlaybackManager
 import com.tehmaz.musicplayer.ui.screens.home.HomeViewModel
 import com.tehmaz.musicplayer.ui.screens.library.LibraryViewModel
@@ -15,17 +20,30 @@ import org.koin.dsl.module
 
 /**
  * Main application dependency injection module.
- * Provides AudioScanner, AudioRepository, AudioPlaybackManager, and Jetpack Compose ViewModels.
  */
 val appModule = module {
+    // Persistence (favorites, user playlists, listening history)
+    single { KeyValueStore(androidContext()) }
+    single { FavoritesStore(get<KeyValueStore>()) }
+    single { UserPlaylistStore(get<KeyValueStore>()) }
+    single { HistoryStore(get<KeyValueStore>()) }
+
+    // Real audio effects attached by PlaybackService
+    single { EqualizerController(androidContext()) }
+
     // Media scanner for querying local device audio
     single { AudioScanner(androidContext()) }
 
-    // Repository providing local audio tracks with curated fallback catalog
-    single<AudioRepository> { AudioRepositoryImpl(get(), androidContext()) }
+    // Repository providing the user's local music (no placeholder catalog)
+    single<AudioRepository> { AudioRepositoryImpl(get(), androidContext(), get(), get()) }
 
-    // Audio playback manager handling Media3 playback service and reactive StateFlow
-    single { AudioPlaybackManager(androidContext()) }
+    // Playback manager wrapping the Media3 controller; records listening history
+    single {
+        val repository = get<AudioRepository>()
+        AudioPlaybackManager(androidContext()).apply {
+            onSongStarted = { song -> repository.recordPlayed(song.id) }
+        }
+    }
 
     // Screen ViewModels
     viewModel { HomeViewModel(get(), get()) }

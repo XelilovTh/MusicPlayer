@@ -29,8 +29,11 @@ import kotlinx.coroutines.launch
 
 /**
  * Manages audio playback via Jetpack Media3 MediaController.
- * Exposes reactive StateFlow for the current song, position, duration, and playback status.
- * Provides resilient fallback for simulated playback when network or offline audio is unavailable.
+ *
+ * Exposes reactive StateFlows for the current song, position, duration and playback status.
+ * The MediaController connects asynchronously: a play request made before it is ready is
+ * remembered and replayed on connection. There is no fake/simulated playback; real player
+ * errors are surfaced through [PlaybackState.errorMessage].
  */
 class AudioPlaybackManager(
     private val context: Context,
@@ -40,7 +43,10 @@ class AudioPlaybackManager(
     companion object {
         private const val TAG = "AudioPlaybackManager"
         private const val TICK_INTERVAL_MS = 250L
+        private const val SLEEP_TICK_MS = 1000L
     }
+
+    private data class PendingPlayback(val queue: List<Song>, val startIndex: Int)
 
     private val _playbackState = MutableStateFlow(PlaybackState())
     val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
@@ -48,11 +54,21 @@ class AudioPlaybackManager(
     private val _currentPlaylist = MutableStateFlow<List<Song>>(emptyList())
     val currentPlaylist: StateFlow<List<Song>> = _currentPlaylist.asStateFlow()
 
+    private val _sleepTimerRemainingMs = MutableStateFlow<Long?>(null)
+
+    /** Remaining sleep timer time in milliseconds, or null when no timer is running. */
+    val sleepTimerRemainingMs: StateFlow<Long?> = _sleepTimerRemainingMs.asStateFlow()
+
+    /** Invoked whenever a track starts; used to record listening history. */
+    var onSongStarted: ((Song) -> Unit)? = null
+
     private val songCache = mutableMapOf<String, Song>()
 
     private var mediaController: MediaController? = null
+    private var pendingPlayback: PendingPlayback? = null
     private var progressJob: Job? = null
-    private var isSimulatingOffline = false
+    private var sleepJob: Job? = null
+    private var consecutiveErrors = 0
 
     init {
         initializeMediaController()
@@ -72,9 +88,13 @@ class AudioPlaybackManager(
                         val controller = controllerFuture.get()
                         mediaController = controller
                         attachPlayerListener(controller)
-                        Log.d(TAG, "MediaController successfully connected to PlaybackService.")
+                        applyPendingState(controller)
+                        Log.d(TAG, "MediaController connected to PlaybackService.")
                     } catch (e: Exception) {
-                        Log.w(TAG, "MediaController connection failed, using fallback controller mode: ${e.message}")
+                        Log.w(TAG, "MediaController connection failed: ${e.message}")
+                        _playbackState.update {
+                            it.copy(isPlaying = false, errorMessage = "Playback service is unavailable")
+                        }
                     }
                 },
                 ContextCompat.getMainExecutor(context)
@@ -84,48 +104,64 @@ class AudioPlaybackManager(
         }
     }
 
+    /** Applies shuffle/repeat chosen before connection and replays a request made too early. */
+    private fun applyPendingState(controller: MediaController) {
+        val state = _playbackState.value
+        controller.shuffleModeEnabled = state.isShuffle
+        controller.repeatMode = state.repeatMode.toPlayerRepeatMode()
+
+        val pending = pendingPlayback ?: return
+        pendingPlayback = null
+        try {
+            startQueue(controller, pending.queue, pending.startIndex, _playbackState.value.isPlaying)
+            if (_playbackState.value.isPlaying) startProgressTicker()
+        } catch (e: Exception) {
+            Log.w(TAG, "Unable to start pending playback: ${e.message}")
+        }
+    }
+
     private fun attachPlayerListener(player: Player) {
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                isSimulatingOffline = false
-                _playbackState.update { it.copy(isPlaying = isPlaying) }
-                if (isPlaying) {
-                    startProgressTicker()
-                } else {
-                    stopProgressTicker()
-                }
+                if (isPlaying) consecutiveErrors = 0
+                syncPlayingState(player)
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                syncPlayingState(player)
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 if (mediaItem == null) return
                 val song = songCache[mediaItem.mediaId]
                     ?: _currentPlaylist.value.firstOrNull { it.id.toString() == mediaItem.mediaId }
-                
-                if (song != null) {
-                    _playbackState.update {
-                        it.copy(
-                            currentSong = song,
-                            currentPositionMs = 0L,
-                            totalDurationMs = if (song.durationMs > 0) song.durationMs else 0L
-                        )
-                    }
+                    ?: return
+
+                notifySongStarted(song)
+                _playbackState.update {
+                    it.copy(
+                        currentSong = song,
+                        currentPositionMs = 0L,
+                        totalDurationMs = if (song.durationMs > 0) song.durationMs else 0L
+                    )
                 }
             }
 
             override fun onPlaybackStateChanged(state: Int) {
                 when (state) {
                     Player.STATE_READY -> {
+                        consecutiveErrors = 0
                         val duration = player.duration
                         if (duration > 0) {
                             _playbackState.update { it.copy(totalDurationMs = duration) }
                         }
                     }
                     Player.STATE_ENDED -> {
-                        _playbackState.update { it.copy(isPlaying = false, currentPositionMs = it.totalDurationMs) }
-                        stopProgressTicker()
+                        _playbackState.update { it.copy(currentPositionMs = it.totalDurationMs) }
                     }
                     else -> Unit
                 }
+                syncPlayingState(player)
             }
 
             override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
@@ -142,75 +178,127 @@ class AudioPlaybackManager(
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                Log.w(TAG, "ExoPlayer error (${error.errorCode}): ${error.message}. Activating simulated playback.")
-                // Seamlessly fall back to simulated ticker so UI animations & play state remain responsive
-                isSimulatingOffline = true
-                _playbackState.update { it.copy(isPlaying = true) }
-                startProgressTicker()
+                consecutiveErrors++
+                Log.w(TAG, "Player error (${error.errorCode}): ${error.message}")
+                val message = describeError(error)
+
+                // Skip an unplayable track, but never loop forever over a fully broken queue.
+                val canSkip = player.hasNextMediaItem() && consecutiveErrors < player.mediaItemCount
+                if (canSkip) {
+                    _playbackState.update { it.copy(errorMessage = message) }
+                    player.seekToNextMediaItem()
+                    player.prepare()
+                    player.play()
+                } else {
+                    _playbackState.update { it.copy(isPlaying = false, errorMessage = message) }
+                    stopProgressTicker()
+                }
             }
         })
+    }
+
+    /** The UI shows "playing" while playback is wanted, including short buffering phases. */
+    private fun syncPlayingState(player: Player) {
+        val state = player.playbackState
+        val shouldShowPlaying = player.playWhenReady &&
+            state != Player.STATE_ENDED &&
+            state != Player.STATE_IDLE
+        _playbackState.update { it.copy(isPlaying = shouldShowPlaying) }
+        if (shouldShowPlaying) startProgressTicker() else stopProgressTicker()
+    }
+
+    private fun describeError(error: PlaybackException): String {
+        return when (error.errorCode) {
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "No internet connection"
+            PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> "This file could not be found"
+            else -> "Couldn't play this track"
+        }
     }
 
     /**
      * Plays the specified song and optionally sets the upcoming playlist queue.
      */
     fun playSong(song: Song, playlist: List<Song> = emptyList()) {
-        val queue = if (playlist.isNotEmpty()) playlist else listOf(song)
+        val baseQueue = if (playlist.isNotEmpty()) playlist else listOf(song)
+        val queue = if (baseQueue.any { it.id == song.id }) baseQueue else listOf(song) + baseQueue
+        val startIndex = queue.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
+
         _currentPlaylist.value = queue
         queue.forEach { songCache[it.id.toString()] = it }
+        consecutiveErrors = 0
+        notifySongStarted(song)
 
         _playbackState.update {
             it.copy(
                 currentSong = song,
                 isPlaying = true,
                 currentPositionMs = 0L,
-                totalDurationMs = song.durationMs
+                totalDurationMs = song.durationMs,
+                errorMessage = null
             )
         }
 
         val controller = mediaController
-        if (controller != null) {
-            try {
-                val mediaItems = queue.map { it.toMediaItem() }
-                val initialIndex = queue.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
-                controller.setMediaItems(mediaItems, initialIndex, 0L)
-                controller.prepare()
-                controller.play()
-                startProgressTicker()
-                return
-            } catch (e: Exception) {
-                Log.w(TAG, "Error playing song via MediaController: ${e.message}. Falling back to simulation.")
-            }
+        if (controller == null) {
+            // The controller connects asynchronously; replay this request once it is ready.
+            pendingPlayback = PendingPlayback(queue, startIndex)
+            return
         }
 
-        // Fallback simulation when media controller is unavailable
-        isSimulatingOffline = true
-        startProgressTicker()
+        try {
+            startQueue(controller, queue, startIndex, true)
+            startProgressTicker()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error playing song: ${e.message}")
+            _playbackState.update {
+                it.copy(isPlaying = false, errorMessage = "Couldn't start playback")
+            }
+        }
+    }
+
+    private fun startQueue(
+        controller: MediaController,
+        queue: List<Song>,
+        startIndex: Int,
+        playWhenReady: Boolean
+    ) {
+        controller.setMediaItems(queue.map { it.toMediaItem() }, startIndex, 0L)
+        controller.prepare()
+        if (playWhenReady) controller.play() else controller.pause()
     }
 
     /**
-     * Toggles between play and pause.
+     * Toggles between play and pause. Also restarts a finished queue and recovers from errors.
      */
     fun playPause() {
         val controller = mediaController
-        val currentPlaying = _playbackState.value.isPlaying
+        val wantsPlaying = _playbackState.value.isPlaying
 
-        if (controller != null && !isSimulatingOffline) {
-            if (currentPlaying) {
-                controller.pause()
-            } else {
+        if (controller == null) {
+            // Not connected yet: remember the intent, it is applied on connection.
+            _playbackState.update { it.copy(isPlaying = !wantsPlaying) }
+            return
+        }
+
+        if (wantsPlaying) {
+            controller.pause()
+            return
+        }
+
+        when (controller.playbackState) {
+            Player.STATE_ENDED -> {
+                controller.seekToDefaultPosition(0)
                 controller.play()
             }
-        } else {
-            // Simulated toggle
-            val nextPlaying = !currentPlaying
-            _playbackState.update { it.copy(isPlaying = nextPlaying) }
-            if (nextPlaying) {
-                startProgressTicker()
-            } else {
-                stopProgressTicker()
+            Player.STATE_IDLE -> {
+                controller.prepare()
+                controller.play()
             }
+            else -> controller.play()
         }
+        _playbackState.update { it.copy(isPlaying = true, errorMessage = null) }
+        startProgressTicker()
     }
 
     /**
@@ -218,12 +306,12 @@ class AudioPlaybackManager(
      */
     fun next() {
         val controller = mediaController
-        if (controller != null && controller.hasNextMediaItem() && !isSimulatingOffline) {
+        if (controller != null && controller.hasNextMediaItem()) {
             controller.seekToNextMediaItem()
             return
         }
 
-        // Manual playlist iteration
+        // End of queue (or not connected): continue manually, wrapping to the first song.
         val playlist = _currentPlaylist.value
         val current = _playbackState.value.currentSong
         if (playlist.isEmpty()) return
@@ -249,12 +337,11 @@ class AudioPlaybackManager(
             return
         }
 
-        if (controller != null && controller.hasPreviousMediaItem() && !isSimulatingOffline) {
+        if (controller != null && controller.hasPreviousMediaItem()) {
             controller.seekToPreviousMediaItem()
             return
         }
 
-        // Manual playlist iteration
         val playlist = _currentPlaylist.value
         val current = _playbackState.value.currentSong
         if (playlist.isEmpty()) return
@@ -270,10 +357,7 @@ class AudioPlaybackManager(
      */
     fun seekTo(positionMs: Long) {
         val safePos = positionMs.coerceAtLeast(0L)
-        val controller = mediaController
-        if (controller != null && !isSimulatingOffline) {
-            controller.seekTo(safePos)
-        }
+        mediaController?.seekTo(safePos)
         _playbackState.update { it.copy(currentPositionMs = safePos) }
     }
 
@@ -282,10 +366,7 @@ class AudioPlaybackManager(
      */
     fun toggleShuffle() {
         val nextShuffle = !_playbackState.value.isShuffle
-        val controller = mediaController
-        if (controller != null) {
-            controller.shuffleModeEnabled = nextShuffle
-        }
+        mediaController?.shuffleModeEnabled = nextShuffle
         _playbackState.update { it.copy(isShuffle = nextShuffle) }
     }
 
@@ -293,18 +374,55 @@ class AudioPlaybackManager(
      * Cycles repeat mode: OFF -> ALL -> ONE -> OFF.
      */
     fun toggleRepeat() {
-        val currentMode = _playbackState.value.repeatMode
-        val (nextMode, exoRepeatMode) = when (currentMode) {
-            RepeatMode.OFF -> RepeatMode.ALL to Player.REPEAT_MODE_ALL
-            RepeatMode.ALL -> RepeatMode.ONE to Player.REPEAT_MODE_ONE
-            RepeatMode.ONE -> RepeatMode.OFF to Player.REPEAT_MODE_OFF
+        val nextMode = when (_playbackState.value.repeatMode) {
+            RepeatMode.OFF -> RepeatMode.ALL
+            RepeatMode.ALL -> RepeatMode.ONE
+            RepeatMode.ONE -> RepeatMode.OFF
         }
-
-        val controller = mediaController
-        if (controller != null) {
-            controller.repeatMode = exoRepeatMode
-        }
+        mediaController?.repeatMode = nextMode.toPlayerRepeatMode()
         _playbackState.update { it.copy(repeatMode = nextMode) }
+    }
+
+    /** Clears the one-shot error after the UI has shown it. */
+    fun clearError() {
+        _playbackState.update { it.copy(errorMessage = null) }
+    }
+
+    /**
+     * Starts (or restarts) the sleep timer. Playback is paused when it reaches zero.
+     */
+    fun startSleepTimer(minutes: Int) {
+        if (minutes <= 0) {
+            cancelSleepTimer()
+            return
+        }
+        sleepJob?.cancel()
+        _sleepTimerRemainingMs.value = minutes * 60_000L
+        sleepJob = scope.launch {
+            var remaining = minutes * 60_000L
+            while (remaining > 0L && isActive) {
+                _sleepTimerRemainingMs.value = remaining
+                delay(SLEEP_TICK_MS)
+                remaining -= SLEEP_TICK_MS
+            }
+            if (isActive) {
+                _sleepTimerRemainingMs.value = null
+                pauseFromSleepTimer()
+            }
+        }
+    }
+
+    /** Cancels a running sleep timer. */
+    fun cancelSleepTimer() {
+        sleepJob?.cancel()
+        sleepJob = null
+        _sleepTimerRemainingMs.value = null
+    }
+
+    private fun pauseFromSleepTimer() {
+        mediaController?.pause()
+        _playbackState.update { it.copy(isPlaying = false) }
+        stopProgressTicker()
     }
 
     /**
@@ -312,52 +430,23 @@ class AudioPlaybackManager(
      */
     fun release() {
         stopProgressTicker()
+        cancelSleepTimer()
         mediaController?.release()
         mediaController = null
     }
 
     private fun startProgressTicker() {
-        progressJob?.cancel()
+        if (progressJob?.isActive == true) return
         progressJob = scope.launch {
             while (isActive && _playbackState.value.isPlaying) {
                 delay(TICK_INTERVAL_MS)
-                val controller = mediaController
-                if (controller != null && !isSimulatingOffline) {
-                    val pos = controller.currentPosition.coerceAtLeast(0L)
-                    val dur = controller.duration.let { if (it > 0) it else _playbackState.value.totalDurationMs }
-                    _playbackState.update { it.copy(currentPositionMs = pos, totalDurationMs = dur) }
-                } else {
-                    // Simulated progress tick
-                    val cur = _playbackState.value.currentPositionMs
-                    val total = _playbackState.value.totalDurationMs
-                    val next = cur + TICK_INTERVAL_MS
-                    if (total > 0 && next >= total) {
-                        handleTrackCompletion()
-                    } else {
-                        _playbackState.update { it.copy(currentPositionMs = next) }
-                    }
+                val controller = mediaController ?: continue
+                val position = controller.currentPosition.coerceAtLeast(0L)
+                val duration = controller.duration.let {
+                    if (it > 0) it else _playbackState.value.totalDurationMs
                 }
-            }
-        }
-    }
-
-    private fun handleTrackCompletion() {
-        when (_playbackState.value.repeatMode) {
-            RepeatMode.ONE -> {
-                seekTo(0L)
-            }
-            RepeatMode.ALL -> {
-                next()
-            }
-            RepeatMode.OFF -> {
-                val playlist = _currentPlaylist.value
-                val current = _playbackState.value.currentSong
-                val currentIndex = playlist.indexOfFirst { it.id == current?.id }
-                if (currentIndex >= 0 && currentIndex < playlist.size - 1) {
-                    next()
-                } else {
-                    _playbackState.update { it.copy(isPlaying = false, currentPositionMs = it.totalDurationMs) }
-                    stopProgressTicker()
+                _playbackState.update {
+                    it.copy(currentPositionMs = position, totalDurationMs = duration)
                 }
             }
         }
@@ -366,6 +455,20 @@ class AudioPlaybackManager(
     private fun stopProgressTicker() {
         progressJob?.cancel()
         progressJob = null
+    }
+
+    private fun notifySongStarted(song: Song) {
+        try {
+            onSongStarted?.invoke(song)
+        } catch (e: Exception) {
+            Log.w(TAG, "onSongStarted failed: ${e.message}")
+        }
+    }
+
+    private fun RepeatMode.toPlayerRepeatMode(): Int = when (this) {
+        RepeatMode.OFF -> Player.REPEAT_MODE_OFF
+        RepeatMode.ALL -> Player.REPEAT_MODE_ALL
+        RepeatMode.ONE -> Player.REPEAT_MODE_ONE
     }
 
     private fun Song.toMediaItem(): MediaItem {

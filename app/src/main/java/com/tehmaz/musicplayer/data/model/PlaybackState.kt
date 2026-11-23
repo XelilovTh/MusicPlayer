@@ -21,6 +21,7 @@ enum class RepeatMode {
  * @property totalDurationMs Total duration of current track in milliseconds.
  * @property isShuffle True if shuffle playback order is active.
  * @property repeatMode Active repeat mode (OFF, ALL, ONE).
+ * @property errorMessage One-shot playback error to show to the user, or null.
  */
 data class PlaybackState(
     val currentSong: Song? = null,
@@ -28,7 +29,8 @@ data class PlaybackState(
     val currentPositionMs: Long = 0L,
     val totalDurationMs: Long = 0L,
     val isShuffle: Boolean = false,
-    val repeatMode: RepeatMode = RepeatMode.OFF
+    val repeatMode: RepeatMode = RepeatMode.OFF,
+    val errorMessage: String? = null
 ) {
     /**
      * Normalized progress value between 0.0f and 1.0f.
