@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class SearchViewModel(
@@ -48,7 +49,9 @@ class SearchViewModel(
         _query.value = newQuery
         searchJob?.cancel()
         searchJob = viewModelScope.launch {
-            _searchResults.value = if (newQuery.isBlank()) repository.getSongs()
+            // Wait briefly for typing to settle; cancelled jobs never scan/filter for stale text.
+            delay(180L)
+            _searchResults.value = if (newQuery.isBlank()) _allSongs.value
                 else repository.searchSongs(newQuery)
         }
     }

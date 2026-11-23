@@ -190,8 +190,8 @@ class ViewModelTest {
         // Query change with non-blank
         viewModel.onQueryChange("Song 1")
         advanceUntilIdle()
-        coVerify { repository.searchSongs("Song 1") }
-        assertEquals(1, viewModel.searchResults.value.size)
+        coVerify(exactly = 1) { repository.searchSongs("Song 1") }
+        assertEquals(listOf(testSong1), viewModel.searchResults.value)
 
         // Query change with blank resets to initial
         viewModel.onQueryChange("")
@@ -208,7 +208,7 @@ class ViewModelTest {
         advanceUntilIdle()
         assertEquals("Song 1", viewModel.query.value)
         assertEquals(listOf(testSong1), viewModel.searchResults.value)
-        coVerify { repository.searchSongs("Song 1") }
+        coVerify(exactly = 1) { repository.searchSongs("Song 1") }
 
         viewModel.playSong(testSong1)
         verify { playbackManager.playSong(testSong1, listOf(testSong1)) }

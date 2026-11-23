@@ -70,6 +70,7 @@ import coil.compose.AsyncImage
 import com.tehmaz.musicplayer.data.model.PlaybackState
 import com.tehmaz.musicplayer.data.model.RepeatMode
 import com.tehmaz.musicplayer.ui.components.GlassIconButton
+import com.tehmaz.musicplayer.ui.components.rememberPlaybackControls
 import com.tehmaz.musicplayer.ui.components.AddToPlaylistDialogHost
 import com.tehmaz.musicplayer.ui.components.GlowBackground
 import com.tehmaz.musicplayer.ui.theme.AmberGoldDark
@@ -80,6 +81,9 @@ import com.tehmaz.musicplayer.ui.theme.GoldenAmberGradient
 import com.tehmaz.musicplayer.ui.theme.TextMuted
 import com.tehmaz.musicplayer.ui.theme.TextPrimary
 import com.tehmaz.musicplayer.ui.theme.TextSecondary
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import org.koin.androidx.compose.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -91,10 +95,10 @@ fun NowPlayingScreen(
     onNavigateToSettings: () -> Unit,
     viewModel: NowPlayingViewModel = koinViewModel()
 ) {
-    val playbackState by viewModel.playbackState.collectAsState()
+    val playbackControls = rememberPlaybackControls(viewModel.playbackState)
     val favoriteIds by viewModel.favoriteIds.collectAsState()
 
-    val song = playbackState.currentSong
+    val song = playbackControls.currentSong
     val isFavorite = song?.let { it.id in favoriteIds } == true
     var showAddToPlaylist by remember { mutableStateOf(false) }
     var sliderPosition by remember { mutableFloatStateOf(0f) }
@@ -250,53 +254,11 @@ fun NowPlayingScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // 4. Interactive Progress Slider with mm:ss Timestamps
-            val currentProgress = if (isUserDragging) sliderPosition else playbackState.progress
-
-            Slider(
-                value = currentProgress,
-                onValueChange = { pos ->
-                    isUserDragging = true
-                    sliderPosition = pos
-                },
-                onValueChangeFinished = {
-                    isUserDragging = false
-                    val seekTarget = (sliderPosition * playbackState.totalDurationMs).toLong()
-                    viewModel.seekTo(seekTarget)
-                },
-                colors = SliderDefaults.colors(
-                    thumbColor = AmberGoldLight,
-                    activeTrackColor = AmberGoldPrimary,
-                    inactiveTrackColor = Color(0x33F5B853)
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp)
+            // Position updates are isolated so the artwork and transport controls do not recompose.
+            PlaybackProgressControls(
+                playbackState = viewModel.playbackState,
+                onSeek = viewModel::seekTo
             )
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = if (isUserDragging) {
-                        PlaybackState.formatTime((sliderPosition * playbackState.totalDurationMs).toLong())
-                    } else {
-                        playbackState.formattedPosition
-                    },
-                    color = TextSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    text = playbackState.formattedDuration,
-                    color = TextSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -316,7 +278,7 @@ fun NowPlayingScreen(
                     Icon(
                         imageVector = Icons.Rounded.Shuffle,
                         contentDescription = "Shuffle",
-                        tint = if (playbackState.isShuffle) AmberGoldPrimary else TextMuted,
+                        tint = if (playbackControls.isShuffle) AmberGoldPrimary else TextMuted,
                         modifier = Modifier.size(24.dp)
                     )
                 }
@@ -354,8 +316,8 @@ fun NowPlayingScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = if (playbackState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = if (playbackState.isPlaying) "Pause" else "Play",
+                        imageVector = if (playbackControls.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        contentDescription = if (playbackControls.isPlaying) "Pause" else "Play",
                         tint = Color(0xFF140E0A),
                         modifier = Modifier.size(36.dp)
                     )
@@ -379,12 +341,12 @@ fun NowPlayingScreen(
                     onClick = { viewModel.toggleRepeat() },
                     modifier = Modifier.size(44.dp)
                 ) {
-                    val repeatIcon = if (playbackState.repeatMode == RepeatMode.ONE) {
+                    val repeatIcon = if (playbackControls.repeatMode == RepeatMode.ONE) {
                         Icons.Rounded.RepeatOne
                     } else {
                         Icons.Rounded.Repeat
                     }
-                    val repeatTint = if (playbackState.repeatMode != RepeatMode.OFF) {
+                    val repeatTint = if (playbackControls.repeatMode != RepeatMode.OFF) {
                         AmberGoldPrimary
                     } else {
                         TextMuted
@@ -407,6 +369,67 @@ fun NowPlayingScreen(
                 onSettingsClick = onNavigateToSettings
             )
         }
+    }
+}
+
+@Composable
+private fun PlaybackProgressControls(
+    playbackState: StateFlow<PlaybackState>,
+    onSeek: (Long) -> Unit
+) {
+    val positionFlow = remember(playbackState) {
+        playbackState
+            .map { it.currentPositionMs to it.totalDurationMs }
+            .distinctUntilChanged()
+    }
+    val initial = playbackState.value
+    val (positionMs, durationMs) = positionFlow.collectAsState(
+        initial = initial.currentPositionMs to initial.totalDurationMs
+    ).value
+
+    var sliderPosition by remember { mutableFloatStateOf(0f) }
+    var isUserDragging by remember { mutableStateOf(false) }
+    val progress = if (durationMs > 0L) {
+        (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+    } else 0f
+    val currentProgress = if (isUserDragging) sliderPosition else progress
+
+    Spacer(modifier = Modifier.height(20.dp))
+    Slider(
+        value = currentProgress,
+        onValueChange = { value ->
+            isUserDragging = true
+            sliderPosition = value
+        },
+        onValueChangeFinished = {
+            isUserDragging = false
+            onSeek((sliderPosition * durationMs).toLong())
+        },
+        colors = SliderDefaults.colors(
+            thumbColor = AmberGoldLight,
+            activeTrackColor = AmberGoldPrimary,
+            inactiveTrackColor = Color(0x33F5B853)
+        ),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = if (isUserDragging) {
+                PlaybackState.formatTime((sliderPosition * durationMs).toLong())
+            } else PlaybackState.formatTime(positionMs),
+            color = TextSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium
+        )
+        Text(
+            text = PlaybackState.formatTime(durationMs),
+            color = TextSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 
