@@ -44,8 +44,8 @@ import com.tehmaz.musicplayer.ui.components.GlassIconButton
 import com.tehmaz.musicplayer.ui.components.GlassmorphicCard
 import com.tehmaz.musicplayer.ui.components.GlassPillButton
 import com.tehmaz.musicplayer.ui.components.GlowBackground
+import com.tehmaz.musicplayer.ui.components.rememberPlaybackSummary
 import com.tehmaz.musicplayer.ui.components.GoldenPillButton
-import com.tehmaz.musicplayer.ui.components.MiniPlayerBar
 import com.tehmaz.musicplayer.ui.screens.library.SongListItem
 import com.tehmaz.musicplayer.ui.theme.AmberGoldPrimary
 import com.tehmaz.musicplayer.ui.theme.GlassBorderGradient
@@ -57,7 +57,6 @@ import org.koin.androidx.compose.koinViewModel
 fun PlaylistScreen(
     playlistId: Long,
     onBackClick: () -> Unit,
-    onNavigateToNowPlaying: () -> Unit,
     onNavigateToPlaylist: (Long) -> Unit,
     viewModel: PlaylistViewModel = koinViewModel()
 ) {
@@ -68,7 +67,7 @@ fun PlaylistScreen(
     val playlist by viewModel.playlist.collectAsState()
     val songs by viewModel.songs.collectAsState()
     val userPlaylists by viewModel.playlists.collectAsState()
-    val playbackState by viewModel.playbackState.collectAsState()
+    val playbackSummary = rememberPlaybackSummary(viewModel.playbackState)
 
     GlowBackground(
         showTopGlow = true,
@@ -80,7 +79,7 @@ fun PlaylistScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                contentPadding = PaddingValues(top = 44.dp, bottom = 120.dp)
+                contentPadding = PaddingValues(top = 44.dp, bottom = if (playbackSummary.first != null) 180.dp else 100.dp)
             ) {
                 // Header Nav Bar
                 item {
@@ -127,7 +126,7 @@ fun PlaylistScreen(
                             )
                         }
                     } else {
-                        itemsIndexed(userPlaylists) { index, userPlaylist ->
+                        itemsIndexed(userPlaylists, key = { _, playlist -> playlist.id }) { index, userPlaylist ->
                             GlassmorphicCard(
                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 5.dp)
                                     .clickable { onNavigateToPlaylist(userPlaylist.id) },
@@ -236,12 +235,12 @@ fun PlaylistScreen(
                     item { Spacer(modifier = Modifier.height(28.dp)) }
 
                     // Track list
-                    itemsIndexed(songs) { index, song ->
-                        val isCurrent = playbackState.currentSong?.id == song.id
+                    itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
+                        val isCurrent = playbackSummary.first == song.id
                         SongListItem(
                             index = index + 1,
                             song = song,
-                            isPlaying = isCurrent && playbackState.isPlaying,
+                            isPlaying = isCurrent && playbackSummary.second,
                             onClick = { viewModel.playSong(song) },
                             onRemoveFromList = if (viewModel.isUserPlaylist()) {
                                 { viewModel.removeSong(song.id) }
@@ -250,18 +249,6 @@ fun PlaylistScreen(
                         Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
-            }
-
-            // Docked MiniPlayer
-            if (playbackState.currentSong != null) {
-                MiniPlayerBar(
-                    currentSong = playbackState.currentSong,
-                    isPlaying = playbackState.isPlaying,
-                    progress = playbackState.progress,
-                    onPlayPauseClick = { viewModel.playPause() },
-                    onNextClick = { viewModel.next() },
-                    onBarClick = onNavigateToNowPlaying
-                )
             }
         }
     }

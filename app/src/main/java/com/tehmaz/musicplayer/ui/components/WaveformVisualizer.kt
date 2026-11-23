@@ -33,16 +33,21 @@ fun WaveformVisualizer(
     height: Dp = 60.dp,
     isPlaying: Boolean = true
 ) {
-    val transition = rememberInfiniteTransition(label = "waveform_anim")
-    val phase by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 2f * Math.PI.toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(2400, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "phase_shift"
-    )
+    val phase = if (isPlaying) {
+        val transition = rememberInfiniteTransition(label = "waveform_anim")
+        val animatedPhase by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 2f * Math.PI.toFloat(),
+            animationSpec = infiniteRepeatable(
+                animation = tween(2400, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "phase_shift"
+        )
+        animatedPhase
+    } else {
+        0f
+    }
 
     Canvas(
         modifier = modifier

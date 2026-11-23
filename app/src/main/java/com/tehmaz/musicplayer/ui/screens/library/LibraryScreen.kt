@@ -56,7 +56,7 @@ import com.tehmaz.musicplayer.ui.components.rememberPermissionRequester
 import com.tehmaz.musicplayer.ui.components.GlassPillButton
 import com.tehmaz.musicplayer.ui.components.GlassmorphicCard
 import com.tehmaz.musicplayer.ui.components.GlowBackground
-import com.tehmaz.musicplayer.ui.components.MiniPlayerBar
+import com.tehmaz.musicplayer.ui.components.rememberPlaybackSummary
 import com.tehmaz.musicplayer.ui.theme.AmberGoldPrimary
 import com.tehmaz.musicplayer.ui.theme.TextMuted
 import com.tehmaz.musicplayer.ui.theme.TextPrimary
@@ -65,10 +65,9 @@ import org.koin.androidx.compose.koinViewModel
 
 @Composable
 fun LibraryScreen(
-    onNavigateToNowPlaying: () -> Unit,
     viewModel: LibraryViewModel = koinViewModel()
 ) {
-    val playbackState by viewModel.playbackState.collectAsState()
+    val playbackSummary = rememberPlaybackSummary(viewModel.playbackState)
     val songs by viewModel.songs.collectAsState()
     val selectedTab by viewModel.selectedTab.collectAsState()
     var hasPermission by remember { mutableStateOf(viewModel.hasPermission()) }
@@ -81,17 +80,27 @@ fun LibraryScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                hasPermission = viewModel.hasPermission()
-                viewModel.rescan()
+                val permissionNowGranted = viewModel.hasPermission()
+                if (!hasPermission && permissionNowGranted) viewModel.rescan()
+                else viewModel.refresh()
+                hasPermission = permissionNowGranted
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    val visibleSongs = when (selectedTab) {
-        LibraryTab.ALL -> songs
-        LibraryTab.ARTISTS -> songs.sortedBy { it.artist.lowercase() + it.title.lowercase() }
-        LibraryTab.ALBUMS -> songs.sortedBy { it.album.lowercase() + it.title.lowercase() }
+    val visibleSongs = remember(songs, selectedTab) {
+        when (selectedTab) {
+            LibraryTab.ALL -> songs
+            LibraryTab.ARTISTS -> songs.sortedBy { it.artist.lowercase() + it.title.lowercase() }
+            LibraryTab.ALBUMS -> songs.sortedBy { it.album.lowercase() + it.title.lowercase() }
+        }
+    }
+    val groupedSongs = remember(visibleSongs, selectedTab) {
+        if (selectedTab == LibraryTab.ALL) emptyList()
+        else visibleSongs.groupBy {
+            if (selectedTab == LibraryTab.ARTISTS) it.artist else it.album
+        }.toSortedMap(String.CASE_INSENSITIVE_ORDER).entries.toList()
     }
 
     GlowBackground(
@@ -104,7 +113,7 @@ fun LibraryScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                contentPadding = PaddingValues(top = 48.dp, bottom = 120.dp)
+                contentPadding = PaddingValues(top = 48.dp, bottom = if (playbackSummary.first != null) 180.dp else 100.dp)
             ) {
                 // Header with title and shuffle all
                 item {
@@ -162,21 +171,18 @@ fun LibraryScreen(
 
                 // Real local tracks, grouped by artist or album when those tabs are selected.
                 if (selectedTab == LibraryTab.ALL) {
-                    itemsIndexed(visibleSongs) { index, song ->
-                        val isCurrent = playbackState.currentSong?.id == song.id
+                    itemsIndexed(visibleSongs, key = { _, song -> song.id }) { index, song ->
+                        val isCurrent = playbackSummary.first == song.id
                         SongListItem(
                             index = index + 1,
                             song = song,
-                            isPlaying = isCurrent && playbackState.isPlaying,
+                            isPlaying = isCurrent && playbackSummary.second,
                             onClick = { viewModel.playSong(song) }
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                     }
                 } else {
-                    val groups = visibleSongs.groupBy {
-                        if (selectedTab == LibraryTab.ARTISTS) it.artist else it.album
-                    }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
-                    items(groups.entries.toList()) { group ->
+                    items(groupedSongs, key = { it.key }) { group ->
                         Column(modifier = Modifier.fillMaxWidth()) {
                             Text(
                                 text = group.key,
@@ -186,11 +192,11 @@ fun LibraryScreen(
                                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp)
                             )
                             group.value.forEachIndexed { index, song ->
-                                val isCurrent = playbackState.currentSong?.id == song.id
+                                val isCurrent = playbackSummary.first == song.id
                                 SongListItem(
                                     index = index + 1,
                                     song = song,
-                                    isPlaying = isCurrent && playbackState.isPlaying,
+                                    isPlaying = isCurrent && playbackSummary.second,
                                     onClick = { viewModel.playSong(song) }
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
@@ -198,18 +204,6 @@ fun LibraryScreen(
                         }
                     }
                 }
-            }
-
-            // Docked MiniPlayer
-            if (playbackState.currentSong != null) {
-                MiniPlayerBar(
-                    currentSong = playbackState.currentSong,
-                    isPlaying = playbackState.isPlaying,
-                    progress = playbackState.progress,
-                    onPlayPauseClick = { viewModel.playPause() },
-                    onNextClick = { viewModel.next() },
-                    onBarClick = onNavigateToNowPlaying
-                )
             }
         }
     }

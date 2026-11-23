@@ -82,8 +82,9 @@ class AudioRepositoryImpl(
                 )
             }
         }
+        val songsById = songs.associateBy(Song::id)
         userPlaylists.playlists.value.forEach { userPlaylist ->
-            val resolved = userPlaylist.songIds.mapNotNull { id -> songs.firstOrNull { it.id == id } }
+            val resolved = userPlaylist.songIds.mapNotNull(songsById::get)
             result += Playlist(
                 id = userPlaylist.id,
                 name = userPlaylist.name,
@@ -100,9 +101,8 @@ class AudioRepositoryImpl(
     }
 
     override suspend fun getRecentSongs(): List<Song> = withContext(Dispatchers.IO) {
-        val songs = getSongs()
-        history.recentSongIds().mapNotNull { id -> songs.firstOrNull { it.id == id } }
-            .take(RECENT_LIMIT)
+        val songsById = getSongs().associateBy(Song::id)
+        history.recentSongIds().mapNotNull(songsById::get).take(RECENT_LIMIT)
     }
 
     override suspend fun refresh() {

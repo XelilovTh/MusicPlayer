@@ -51,10 +51,8 @@ class LibraryViewModel(
     fun hasPermission(): Boolean = repository.hasPermission()
 
     fun rescan() {
-        viewModelScope.launch {
-            repository.refresh()
-            refresh()
-        }
+        // repository.refresh() emits LibraryEvents; the observer performs one reload.
+        viewModelScope.launch { repository.refresh() }
     }
     fun selectTab(tab: LibraryTab) { _selectedTab.value = tab }
     fun playSong(song: Song) = playbackManager.playSong(song, _songs.value)

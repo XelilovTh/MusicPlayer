@@ -47,10 +47,8 @@ class HomeViewModel(
     fun hasPermission(): Boolean = repository.hasPermission()
 
     fun rescan() {
-        viewModelScope.launch {
-            repository.refresh()
-            refresh()
-        }
+        // repository.refresh() emits LibraryEvents; the observer performs one reload.
+        viewModelScope.launch { repository.refresh() }
     }
 
     fun playSong(song: Song, queue: List<Song> = emptyList()) {
