@@ -35,10 +35,16 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -53,6 +59,8 @@ import coil.compose.AsyncImage
 import com.tehmaz.musicplayer.data.model.Playlist
 import com.tehmaz.musicplayer.data.model.Song
 import com.tehmaz.musicplayer.ui.components.DiscoverBadge
+import com.tehmaz.musicplayer.ui.components.EmptyLibraryCard
+import com.tehmaz.musicplayer.ui.components.rememberPermissionRequester
 import com.tehmaz.musicplayer.ui.components.GlassIconButton
 import com.tehmaz.musicplayer.ui.components.GlassmorphicCard
 import com.tehmaz.musicplayer.ui.components.GlowBackground
@@ -80,6 +88,24 @@ fun HomeScreen(
     val playbackState by viewModel.playbackState.collectAsState()
     val recentSongs by viewModel.recentSongs.collectAsState()
     val playlists by viewModel.playlists.collectAsState()
+    val allSongs by viewModel.allSongs.collectAsState()
+    var hasPermission by remember { mutableStateOf(viewModel.hasPermission()) }
+    val requestPermission = rememberPermissionRequester {
+        hasPermission = viewModel.hasPermission()
+        viewModel.rescan()
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasPermission = viewModel.hasPermission()
+                viewModel.rescan()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     GlowBackground(
         showTopGlow = true,
@@ -98,8 +124,8 @@ fun HomeScreen(
                 // 1. Top Header with User Greeting
                 item {
                     HomeTopHeader(
-                        userName = "Tehmaz 👋",
-                        greeting = "Good Morning",
+                        userName = "Nota",
+                        greeting = "Your personal music library",
                         onSearchClick = onNavigateToSearch,
                         onSettingsClick = onNavigateToSettings
                     )
@@ -107,18 +133,20 @@ fun HomeScreen(
 
                 item { Spacer(modifier = Modifier.height(20.dp)) }
 
-                // 2. Glowing Hero Vinyl Card
-                item {
-                    HeroVinylCard(
-                        isPlaying = playbackState.isPlaying,
-                        onPlayClick = { viewModel.playHeroCard() }
-                    )
+                if (allSongs.isEmpty()) {
+                    item { EmptyLibraryCard(hasPermission, requestPermission, viewModel::rescan) }
+                } else {
+                    item {
+                        HeroVinylCard(
+                            isPlaying = playbackState.isPlaying,
+                            onPlayClick = { viewModel.playHeroCard() }
+                        )
+                    }
                 }
 
-                item { Spacer(modifier = Modifier.height(28.dp)) }
+                if (allSongs.isNotEmpty()) item { Spacer(modifier = Modifier.height(28.dp)) }
 
-                // 3. Recently Played Section Header
-                item {
+                if (recentSongs.isNotEmpty()) item { // Recently played section
                     SectionHeader(
                         title = "Recently Played",
                         actionText = "See All",
@@ -126,44 +154,42 @@ fun HomeScreen(
                     )
                 }
 
-                item { Spacer(modifier = Modifier.height(14.dp)) }
-
-                // Recently Played Horizontal Cards
-                item {
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 20.dp),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        items(recentSongs) { song ->
-                            RecentlyPlayedCard(
-                                song = song,
-                                isCurrentPlaying = playbackState.currentSong?.id == song.id && playbackState.isPlaying,
-                                onClick = { viewModel.playSong(song, recentSongs) }
-                            )
+                if (allSongs.isNotEmpty()) {
+                    if (recentSongs.isNotEmpty()) {
+                        item { Spacer(modifier = Modifier.height(14.dp)) }
+                        item {
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = 20.dp),
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                items(recentSongs) { song ->
+                                    RecentlyPlayedCard(
+                                        song = song,
+                                        isCurrentPlaying = playbackState.currentSong?.id == song.id && playbackState.isPlaying,
+                                        onClick = { viewModel.playSong(song, recentSongs) }
+                                    )
+                                }
+                            }
                         }
                     }
-                }
-
-                item { Spacer(modifier = Modifier.height(30.dp)) }
-
-                // 4. Your Playlists Section Header
-                item {
-                    SectionHeader(
-                        title = "Your Playlists",
-                        actionText = "See All",
-                        onActionClick = onNavigateToLibrary
-                    )
-                }
-
-                item { Spacer(modifier = Modifier.height(14.dp)) }
-
-                // Playlists Vertical List
-                items(playlists) { playlist ->
-                    PlaylistItemCard(
-                        playlist = playlist,
-                        onClick = { onNavigateToPlaylist(playlist.id) }
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
+                    if (playlists.isNotEmpty()) {
+                        item { Spacer(modifier = Modifier.height(30.dp)) }
+                        item {
+                            SectionHeader(
+                                title = "Your Playlists",
+                                actionText = "See All",
+                                onActionClick = onNavigateToLibrary
+                            )
+                        }
+                        item { Spacer(modifier = Modifier.height(14.dp)) }
+                        items(playlists) { playlist ->
+                            PlaylistItemCard(
+                                playlist = playlist,
+                                onClick = { onNavigateToPlaylist(playlist.id) }
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                        }
+                    }
                 }
             }
 

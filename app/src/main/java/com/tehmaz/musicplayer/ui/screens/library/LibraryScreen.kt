@@ -22,19 +22,23 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.ripple.rememberRipple
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -46,6 +50,9 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.tehmaz.musicplayer.data.model.Song
 import com.tehmaz.musicplayer.ui.components.CategoryPill
+import com.tehmaz.musicplayer.ui.components.EmptyLibraryCard
+import com.tehmaz.musicplayer.ui.components.SongOptionsButton
+import com.tehmaz.musicplayer.ui.components.rememberPermissionRequester
 import com.tehmaz.musicplayer.ui.components.GlassPillButton
 import com.tehmaz.musicplayer.ui.components.GlassmorphicCard
 import com.tehmaz.musicplayer.ui.components.GlowBackground
@@ -64,6 +71,28 @@ fun LibraryScreen(
     val playbackState by viewModel.playbackState.collectAsState()
     val songs by viewModel.songs.collectAsState()
     val selectedTab by viewModel.selectedTab.collectAsState()
+    var hasPermission by remember { mutableStateOf(viewModel.hasPermission()) }
+    val requestPermission = rememberPermissionRequester {
+        hasPermission = viewModel.hasPermission()
+        viewModel.rescan()
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasPermission = viewModel.hasPermission()
+                viewModel.rescan()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val visibleSongs = when (selectedTab) {
+        LibraryTab.ALL -> songs
+        LibraryTab.ARTISTS -> songs.sortedBy { it.artist.lowercase() + it.title.lowercase() }
+        LibraryTab.ALBUMS -> songs.sortedBy { it.album.lowercase() + it.title.lowercase() }
+    }
 
     GlowBackground(
         showTopGlow = true,
@@ -111,34 +140,57 @@ fun LibraryScreen(
 
                 item { Spacer(modifier = Modifier.height(18.dp)) }
 
-                // Category Filter Pills: All, Artists, Albums, Genres, Playlists
-                item {
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 20.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        items(LibraryTab.values()) { tab ->
-                            CategoryPill(
-                                text = tab.title,
-                                isSelected = tab == selectedTab,
-                                onClick = { viewModel.selectTab(tab) }
-                            )
+                if (songs.isEmpty()) {
+                    item { EmptyLibraryCard(hasPermission, requestPermission, viewModel::rescan) }
+                } else {
+                    item {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 20.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            items(LibraryTab.values()) { tab ->
+                                CategoryPill(
+                                    text = tab.title,
+                                    isSelected = tab == selectedTab,
+                                    onClick = { viewModel.selectTab(tab) }
+                                )
+                            }
                         }
                     }
+                    item { Spacer(modifier = Modifier.height(20.dp)) }
                 }
 
-                item { Spacer(modifier = Modifier.height(20.dp)) }
-
-                // Song List
-                itemsIndexed(songs) { index, song ->
-                    val isCurrent = playbackState.currentSong?.id == song.id
-                    SongListItem(
-                        index = index + 1,
-                        song = song,
-                        isPlaying = isCurrent && playbackState.isPlaying,
-                        onClick = { viewModel.playSong(song) }
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
+                // Real local tracks, grouped by artist or album when those tabs are selected.
+                if (selectedTab == LibraryTab.ALL) {
+                    itemsIndexed(visibleSongs) { index, song ->
+                        val isCurrent = playbackState.currentSong?.id == song.id
+                        SongListItem(index + 1, song, isCurrent && playbackState.isPlaying) {
+                            viewModel.playSong(song)
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                } else {
+                    val groups = visibleSongs.groupBy {
+                        if (selectedTab == LibraryTab.ARTISTS) it.artist else it.album
+                    }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
+                    items(groups.entries.toList()) { group ->
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                text = group.key,
+                                color = AmberGoldPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp)
+                            )
+                            group.value.forEachIndexed { index, song ->
+                                val isCurrent = playbackState.currentSong?.id == song.id
+                                SongListItem(index + 1, song, isCurrent && playbackState.isPlaying) {
+                                    viewModel.playSong(song)
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+                        }
+                    }
                 }
             }
 
@@ -162,7 +214,8 @@ fun SongListItem(
     index: Int,
     song: Song,
     isPlaying: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onRemoveFromList: (() -> Unit)? = null
 ) {
     val shape = RoundedCornerShape(16.dp)
 
@@ -263,18 +316,7 @@ fun SongListItem(
                 fontWeight = FontWeight.Medium
             )
 
-            // More options
-            IconButton(
-                onClick = { /* Menu */ },
-                modifier = Modifier.size(32.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.MoreVert,
-                    contentDescription = "Options",
-                    tint = TextMuted,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
+            SongOptionsButton(song, modifier = Modifier.size(32.dp), onRemoveFromList = onRemoveFromList)
         }
     }
 }

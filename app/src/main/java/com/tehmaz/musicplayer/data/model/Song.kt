@@ -6,7 +6,7 @@ import java.util.concurrent.TimeUnit
 /**
  * Domain model representing a music track.
  *
- * @property id Unique identifier (MediaStore ID or sample ID).
+ * @property id Unique identifier (MediaStore audio ID).
  * @property title Name of the audio track.
  * @property artist Artist or creator name.
  * @property album Album name.

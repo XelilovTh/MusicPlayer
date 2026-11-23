@@ -24,13 +24,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlaylistAdd
@@ -49,10 +47,11 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -71,6 +70,7 @@ import coil.compose.AsyncImage
 import com.tehmaz.musicplayer.data.model.PlaybackState
 import com.tehmaz.musicplayer.data.model.RepeatMode
 import com.tehmaz.musicplayer.ui.components.GlassIconButton
+import com.tehmaz.musicplayer.ui.components.AddToPlaylistDialogHost
 import com.tehmaz.musicplayer.ui.components.GlowBackground
 import com.tehmaz.musicplayer.ui.theme.AmberGoldDark
 import com.tehmaz.musicplayer.ui.theme.AmberGoldLight
@@ -92,9 +92,11 @@ fun NowPlayingScreen(
     viewModel: NowPlayingViewModel = koinViewModel()
 ) {
     val playbackState by viewModel.playbackState.collectAsState()
-    val isFavorite by viewModel.isFavorite.collectAsState()
+    val favoriteIds by viewModel.favoriteIds.collectAsState()
 
     val song = playbackState.currentSong
+    val isFavorite = song?.let { it.id in favoriteIds } == true
+    var showAddToPlaylist by remember { mutableStateOf(false) }
     var sliderPosition by remember { mutableFloatStateOf(0f) }
     var isUserDragging by remember { androidx.compose.runtime.mutableStateOf(false) }
 
@@ -209,7 +211,7 @@ fun NowPlayingScreen(
 
                 // Add to playlist icon
                 IconButton(
-                    onClick = { /* Add to playlist */ },
+                    onClick = { if (song != null) showAddToPlaylist = true },
                     modifier = Modifier.size(40.dp)
                 ) {
                     Icon(
@@ -229,6 +231,7 @@ fun NowPlayingScreen(
                 )
 
                 IconButton(
+                    enabled = song != null,
                     onClick = { viewModel.toggleFavorite() },
                     modifier = Modifier.size(40.dp)
                 ) {
@@ -239,6 +242,10 @@ fun NowPlayingScreen(
                         modifier = Modifier.size(24.dp)
                     )
                 }
+            }
+
+            if (showAddToPlaylist && song != null) {
+                AddToPlaylistDialogHost(song = song, onDismiss = { showAddToPlaylist = false })
             }
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -395,7 +402,6 @@ fun NowPlayingScreen(
 
             // 6. Bottom Frosted Glass Action Dock: Lyrics, EQ, Sleep Timer, Settings
             BottomGlassActionDock(
-                onLyricsClick = { /* Show Lyrics */ },
                 onEQClick = onNavigateToEQ,
                 onSleepTimerClick = onNavigateToSleepTimer,
                 onSettingsClick = onNavigateToSettings
@@ -448,17 +454,7 @@ private fun NowPlayingHeader(
             )
         }
 
-        GlassIconButton(
-            onClick = { /* Menu */ },
-            size = 40.dp
-        ) {
-            Icon(
-                imageVector = Icons.Default.MoreVert,
-                contentDescription = "More",
-                tint = TextPrimary,
-                modifier = Modifier.size(20.dp)
-            )
-        }
+        Spacer(modifier = Modifier.size(40.dp))
     }
 }
 
@@ -468,7 +464,6 @@ private fun NowPlayingHeader(
  */
 @Composable
 private fun BottomGlassActionDock(
-    onLyricsClick: () -> Unit,
     onEQClick: () -> Unit,
     onSleepTimerClick: () -> Unit,
     onSettingsClick: () -> Unit
@@ -494,11 +489,6 @@ private fun BottomGlassActionDock(
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            DockActionButton(
-                icon = Icons.Rounded.Lyrics,
-                label = "Lyrics",
-                onClick = onLyricsClick
-            )
             DockActionButton(
                 icon = Icons.Rounded.GraphicEq,
                 label = "EQ",

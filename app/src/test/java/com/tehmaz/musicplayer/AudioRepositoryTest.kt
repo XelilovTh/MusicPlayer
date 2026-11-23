@@ -136,10 +136,8 @@ class AudioRepositoryTest {
     }
 
     @Test
-    fun getRecentSongs_withoutHistory_returnsFirstSongs() = runTest {
-        val recent = repository.getRecentSongs()
-        assertEquals(3, recent.size)
-        assertEquals(1L, recent[0].id)
+    fun getRecentSongs_withoutHistory_returnsEmptyInsteadOfInventingRecentPlays() = runTest {
+        assertTrue(repository.getRecentSongs().isEmpty())
     }
 
     @Test

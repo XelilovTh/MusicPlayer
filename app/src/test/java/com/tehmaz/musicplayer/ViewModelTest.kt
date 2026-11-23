@@ -4,6 +4,8 @@ import com.tehmaz.musicplayer.data.model.PlaybackState
 import com.tehmaz.musicplayer.data.model.Playlist
 import com.tehmaz.musicplayer.data.model.Song
 import com.tehmaz.musicplayer.data.repository.AudioRepository
+import com.tehmaz.musicplayer.data.store.FavoritesStore
+import com.tehmaz.musicplayer.data.store.UserPlaylistStore
 import com.tehmaz.musicplayer.playback.AudioPlaybackManager
 import com.tehmaz.musicplayer.ui.screens.home.HomeViewModel
 import com.tehmaz.musicplayer.ui.screens.library.LibraryTab
@@ -67,7 +69,7 @@ class ViewModelTest {
 
     @Test
     fun testNowPlayingViewModelPlaybackActions() {
-        val viewModel = NowPlayingViewModel(playbackManager)
+        val viewModel = NowPlayingViewModel(playbackManager, FavoritesStore())
 
         viewModel.playPause()
         verify(exactly = 1) { playbackManager.playPause() }
@@ -90,14 +92,15 @@ class ViewModelTest {
 
     @Test
     fun testNowPlayingViewModelFavoriteToggle() {
-        val viewModel = NowPlayingViewModel(playbackManager)
-        assertFalse(viewModel.isFavorite.value)
+        playbackStateFlow.value = PlaybackState(currentSong = testSong1)
+        val viewModel = NowPlayingViewModel(playbackManager, FavoritesStore())
+        assertFalse(testSong1.id in viewModel.favoriteIds.value)
 
         viewModel.toggleFavorite()
-        assertTrue(viewModel.isFavorite.value)
+        assertTrue(testSong1.id in viewModel.favoriteIds.value)
 
         viewModel.toggleFavorite()
-        assertFalse(viewModel.isFavorite.value)
+        assertFalse(testSong1.id in viewModel.favoriteIds.value)
     }
 
     // =========================================================================
@@ -225,7 +228,7 @@ class ViewModelTest {
 
     @Test
     fun testPlaylistViewModelLoadAndPlayback() = runTest(testDispatcher) {
-        val viewModel = PlaylistViewModel(repository, playbackManager)
+        val viewModel = PlaylistViewModel(repository, playbackManager, UserPlaylistStore())
 
         viewModel.loadPlaylist(1L)
         advanceUntilIdle()

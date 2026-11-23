@@ -70,9 +70,10 @@ fun AppNavigation(
                 composable(Screen.Playlists.route) {
                     // Playlists tab displays default curated playlist or overview
                     PlaylistScreen(
-                        playlistId = 1L,
+                        playlistId = -1L,
                         onBackClick = { navController.popBackStack() },
-                        onNavigateToNowPlaying = { navController.navigate(Screen.NowPlaying.route) }
+                        onNavigateToNowPlaying = { navController.navigate(Screen.NowPlaying.route) },
+                        onNavigateToPlaylist = { id -> navController.navigate(Screen.PlaylistDetail.createRoute(id)) }
                     )
                 }
 
@@ -98,7 +99,8 @@ fun AppNavigation(
                     PlaylistScreen(
                         playlistId = playlistId,
                         onBackClick = { navController.popBackStack() },
-                        onNavigateToNowPlaying = { navController.navigate(Screen.NowPlaying.route) }
+                        onNavigateToNowPlaying = { navController.navigate(Screen.NowPlaying.route) },
+                        onNavigateToPlaylist = { id -> navController.navigate(Screen.PlaylistDetail.createRoute(id)) }
                     )
                 }
 

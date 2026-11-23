@@ -40,6 +40,12 @@ class HistoryStore(private val store: KeyValueStore? = null) {
     }
 
     @Synchronized
+    fun clearSongs() {
+        songIds = emptyList()
+        store?.putString(KEY_SONGS, null)
+    }
+
+    @Synchronized
     fun clearSearches() {
         searches = emptyList()
         store?.putString(KEY_SEARCHES, null)
