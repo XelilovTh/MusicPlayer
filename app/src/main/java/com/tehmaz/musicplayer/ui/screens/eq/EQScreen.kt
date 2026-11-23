@@ -46,7 +46,7 @@ import com.tehmaz.musicplayer.ui.theme.AmberGoldPrimary
 import com.tehmaz.musicplayer.ui.theme.TextMuted
 import com.tehmaz.musicplayer.ui.theme.TextPrimary
 import com.tehmaz.musicplayer.ui.theme.TextSecondary
-import org.koin.androidx.compose.koinInject
+import org.koin.compose.koinInject
 
 @Composable
 fun EQScreen(onBackClick: () -> Unit) {

@@ -38,7 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -164,9 +164,12 @@ fun LibraryScreen(
                 if (selectedTab == LibraryTab.ALL) {
                     itemsIndexed(visibleSongs) { index, song ->
                         val isCurrent = playbackState.currentSong?.id == song.id
-                        SongListItem(index + 1, song, isCurrent && playbackState.isPlaying) {
-                            viewModel.playSong(song)
-                        }
+                        SongListItem(
+                            index = index + 1,
+                            song = song,
+                            isPlaying = isCurrent && playbackState.isPlaying,
+                            onClick = { viewModel.playSong(song) }
+                        )
                         Spacer(modifier = Modifier.height(8.dp))
                     }
                 } else {
@@ -184,9 +187,12 @@ fun LibraryScreen(
                             )
                             group.value.forEachIndexed { index, song ->
                                 val isCurrent = playbackState.currentSong?.id == song.id
-                                SongListItem(index + 1, song, isCurrent && playbackState.isPlaying) {
-                                    viewModel.playSong(song)
-                                }
+                                SongListItem(
+                                    index = index + 1,
+                                    song = song,
+                                    isPlaying = isCurrent && playbackState.isPlaying,
+                                    onClick = { viewModel.playSong(song) }
+                                )
                                 Spacer(modifier = Modifier.height(8.dp))
                             }
                         }
